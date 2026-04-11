@@ -42,17 +42,40 @@ agent can be assigned to fix an issue or address PR review feedback in-context.
 ### Goal
 Let the user provide a GitHub PAT and persist it securely.
 
+### Token Storage Strategy
+
+Store the GitHub token in **localStorage via the existing `appSettings` Zustand store**
+(`t3code:app-settings:v1` in `apps/web/src/appSettings.ts`), following the same pattern
+used for `claudeBinaryPath`, `codexBinaryPath`, and other app settings.
+
+```ts
+// appSettings.ts — add to the store
+githubToken: string | null
+setGithubToken: (token: string | null) => void
+```
+
+**Why localStorage:**
+- Matches the existing persistence pattern (chats, drafts, settings all use it)
+- Works in both web and desktop modes
+- Zero extra infrastructure
+
+**Security notes:**
+- localStorage is unencrypted — same trust model as the rest of the app
+- For the Electron desktop build, can optionally upgrade to `safeStorage` (OS keychain) later
+- Token is sent to the server over WS on connect, then held in memory server-side
+
 ### Changes
 
 | File | Action | Details |
 |---|---|---|
 | `packages/contracts/src/github.ts` | CREATE | Effect schemas: `GitHubTokenInput`, `GitHubRepo` (owner + repo parsed from git remote) |
-| `apps/web` — settings/config UI | MODIFY | Add a "GitHub Token" input field in settings; store token in persisted state |
+| `apps/web/src/appSettings.ts` | MODIFY | Add `githubToken` field + setter to the Zustand store (persisted in `t3code:app-settings`) |
+| `apps/web` — settings/config UI | MODIFY | Add a "GitHub Token" input field in settings; reads/writes via `appSettings` store |
 | `apps/server` — GitHub service | CREATE | `GitHubService` class: accepts token, initializes `octokit`, exposes API methods |
-| `apps/server` — WS routes | MODIFY | Add `github:set-token` WS message to pass token to the server-side service |
+| `apps/server` — WS routes | MODIFY | Add `github:set-token` WS message to pass token from client to server-side service |
 
 ### Verification
-- User enters a PAT in settings → server validates it with `GET /user` → shows username confirmation.
+- User enters a PAT in settings → stored in localStorage → sent to server over WS → server validates with `GET /user` → shows username confirmation.
 
 ---
 
