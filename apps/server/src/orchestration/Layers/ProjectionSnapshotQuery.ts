@@ -49,6 +49,12 @@ import {
   type ProjectionThreadCheckpointContext,
   type ProjectionSnapshotQueryShape,
 } from "../Services/ProjectionSnapshotQuery.ts";
+import {
+  deriveLatestUserMessageAt,
+  hasActionableProposedPlanSignal,
+  hasPendingApprovalsSignal,
+  hasPendingUserInputSignal,
+} from "@t3tools/shared/threadSignals";
 
 const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
@@ -251,6 +257,7 @@ function toProjectedThread(input: {
   readonly session: OrchestrationSession | null;
 }): OrchestrationThread {
   const { threadRow } = input;
+  const latestUserMessageAt = deriveLatestUserMessageAt(input.messages);
   return {
     id: threadRow.threadId,
     projectId: threadRow.projectId,
@@ -272,6 +279,13 @@ function toProjectedThread(input: {
     latestTurn: input.latestTurn,
     createdAt: threadRow.createdAt,
     updatedAt: threadRow.updatedAt,
+    latestUserMessageAt,
+    hasPendingApprovals: hasPendingApprovalsSignal(input.activities),
+    hasPendingUserInput: hasPendingUserInputSignal(input.activities),
+    hasActionableProposedPlan: hasActionableProposedPlanSignal(
+      input.proposedPlans,
+      input.latestTurn,
+    ),
     archivedAt: threadRow.archivedAt ?? null,
     deletedAt: threadRow.deletedAt,
     handoff: threadRow.handoff,

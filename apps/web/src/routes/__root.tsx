@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId, type OrchestrationEvent } from "@t3tools/contracts";
 import { defaultTerminalTitleForCliKind } from "@t3tools/shared/terminalThreads";
 import {
   Outlet,
@@ -144,8 +144,46 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function coalesceOrchestrationUiEvents(
+  events: ReadonlyArray<OrchestrationEvent>,
+): OrchestrationEvent[] {
+  if (events.length < 2) {
+    return [...events];
+  }
+
+  const coalesced: OrchestrationEvent[] = [];
+  for (const event of events) {
+    const previous = coalesced.at(-1);
+    if (
+      previous?.type === "thread.message-sent" &&
+      event.type === "thread.message-sent" &&
+      previous.payload.threadId === event.payload.threadId &&
+      previous.payload.messageId === event.payload.messageId
+    ) {
+      coalesced[coalesced.length - 1] = {
+        ...event,
+        payload: {
+          ...event.payload,
+          attachments: event.payload.attachments ?? previous.payload.attachments,
+          createdAt: previous.payload.createdAt,
+          text:
+            !event.payload.streaming && event.payload.text.length > 0
+              ? event.payload.text
+              : previous.payload.text + event.payload.text,
+        },
+      };
+      continue;
+    }
+
+    coalesced.push(event);
+  }
+
+  return coalesced;
+}
+
 function EventRouter() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const applyOrchestrationEvents = useStore((store) => store.applyOrchestrationEvents);
   const setProjectExpanded = useStore((store) => store.setProjectExpanded);
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
@@ -168,6 +206,7 @@ function EventRouter() {
     let syncing = false;
     let pending = false;
     let needsProviderInvalidation = false;
+    let pendingDomainEvents: OrchestrationEvent[] = [];
 
     const removeOrphanedTerminalsForCurrentState = () => {
       const draftThreadIds = Object.keys(
@@ -234,6 +273,10 @@ function EventRouter() {
 
     const domainEventFlushThrottler = new Throttler(
       () => {
+        if (pendingDomainEvents.length > 0) {
+          applyOrchestrationEvents(coalesceOrchestrationUiEvents(pendingDomainEvents));
+          pendingDomainEvents = [];
+        }
         if (needsProviderInvalidation) {
           needsProviderInvalidation = false;
           void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
@@ -255,24 +298,9 @@ function EventRouter() {
         return;
       }
       latestSequence = event.sequence;
+      pendingDomainEvents.push(event);
       if (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted") {
         needsProviderInvalidation = true;
-      }
-      if (event.type === "thread.turn-diff-completed") {
-        useStore.getState().applyThreadTurnDiffCompleted(event.payload.threadId, {
-          turnId: event.payload.turnId,
-          completedAt: event.payload.completedAt,
-          status: event.payload.status,
-          files: event.payload.files.map((file) => ({
-            path: file.path,
-            ...(file.kind !== undefined ? { kind: file.kind } : {}),
-            ...(file.additions !== undefined ? { additions: file.additions } : {}),
-            ...(file.deletions !== undefined ? { deletions: file.deletions } : {}),
-          })),
-          checkpointRef: event.payload.checkpointRef,
-          assistantMessageId: event.payload.assistantMessageId ?? undefined,
-          checkpointTurnCount: event.payload.checkpointTurnCount,
-        });
       }
       domainEventFlushThrottler.maybeExecute();
     });
@@ -378,6 +406,7 @@ function EventRouter() {
       unsubServerConfigUpdated();
     };
   }, [
+    applyOrchestrationEvents,
     navigate,
     queryClient,
     removeOrphanedTerminalStates,

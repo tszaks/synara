@@ -158,6 +158,11 @@ export interface Thread extends ThreadWorkspaceState {
   createdAt: string;
   updatedAt?: string | undefined;
   latestTurn: OrchestrationLatestTurn | null;
+  pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
+  latestUserMessageAt: string | null;
+  hasPendingApprovals: boolean;
+  hasPendingUserInput: boolean;
+  hasActionableProposedPlan: boolean;
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
   subagentAgentId?: string | null;

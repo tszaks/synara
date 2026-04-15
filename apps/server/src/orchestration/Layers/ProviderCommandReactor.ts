@@ -388,14 +388,15 @@ const make = Effect.gen(function* () {
         createdAt,
       });
 
+    const activeSession = thread.session ? yield* resolveActiveSession(thread.id) : undefined;
+    // Only trust the projected session if the provider runtime still has a live session.
     const existingSessionThreadId =
-      thread.session && thread.session.status !== "stopped" ? thread.id : null;
+      thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
     if (existingSessionThreadId) {
       const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
       const providerChanged =
         requestedModelSelection !== undefined &&
         requestedModelSelection.provider !== currentProvider;
-      const activeSession = yield* resolveActiveSession(existingSessionThreadId);
       const sessionModelSwitch =
         currentProvider === undefined
           ? "in-session"

@@ -52,6 +52,10 @@
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"
     },
+    "./threadSignals": {
+      "types": "./src/threadSignals.ts",
+      "import": "./src/threadSignals.ts"
+    },
     "./subagents": {
       "types": "./src/subagents.ts",
       "import": "./src/subagents.ts"
