@@ -84,9 +84,14 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     setPanelBounds: async (input) => {
       ipcRenderer.send(BROWSER_IPC_CHANNELS.setBounds, input);
     },
+    attachWebview: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.attachWebview, input),
     copyScreenshotToClipboard: (input) =>
       ipcRenderer.invoke(BROWSER_IPC_CHANNELS.copyScreenshotToClipboard, input),
     captureScreenshot: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.captureScreenshot, input),
+    clearCookies: () => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.clearCookies),
+    getBrowserUsePolicy: () => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.getBrowserUsePolicy),
+    updateBrowserUsePolicy: (input) =>
+      ipcRenderer.invoke(BROWSER_IPC_CHANNELS.updateBrowserUsePolicy, input),
     executeCdp: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.executeCdp, input),
     navigate: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.navigate, input),
     reload: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.reload, input),
@@ -105,6 +110,13 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.on(BROWSER_IPC_CHANNELS.state, wrappedListener);
       return () => {
         ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.state, wrappedListener);
+      };
+    },
+    onBrowserUseOpenPanelRequest: (listener) => {
+      const wrappedListener = () => listener();
+      ipcRenderer.on(BROWSER_IPC_CHANNELS.requestOpenPanel, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.requestOpenPanel, wrappedListener);
       };
     },
   },

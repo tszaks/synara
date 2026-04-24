@@ -45,6 +45,7 @@ import {
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { isNonFatalCodexErrorMessage } from "../../codexErrorClassification.ts";
 import { ServerConfig } from "../../config.ts";
+import { withCodexBrowserUsePromptHint } from "../browserUseTooling.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "codex" as const;
@@ -1428,16 +1429,18 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           : {}),
       };
 
-      return Effect.tryPromise({
-        try: () => manager.startSession(managerInput),
-        catch: (cause) =>
-          new ProviderAdapterProcessError({
-            provider: PROVIDER,
-            threadId: input.threadId,
-            detail: toMessage(cause, "Failed to start Codex adapter session."),
-            cause,
-          }),
-      }).pipe(Effect.map((session) => session));
+      return Effect.gen(function* () {
+        return yield* Effect.tryPromise({
+          try: () => manager.startSession(managerInput),
+          catch: (cause) =>
+            new ProviderAdapterProcessError({
+              provider: PROVIDER,
+              threadId: input.threadId,
+              detail: toMessage(cause, "Failed to start Codex adapter session."),
+              cause,
+            }),
+        }).pipe(Effect.map((session) => session));
+      });
     };
 
     const sendTurn: CodexAdapterShape["sendTurn"] = (input) =>
@@ -1478,9 +1481,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             }),
           { concurrency: 1 },
         );
+        const routedInput =
+          input.input !== undefined ? withCodexBrowserUsePromptHint(input.input) : undefined;
         const managerInput = {
           threadId: input.threadId,
-          ...(input.input !== undefined ? { input: input.input } : {}),
+          ...(routedInput !== undefined ? { input: routedInput } : {}),
           ...(input.skills !== undefined ? { skills: input.skills } : {}),
           ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
           ...(input.modelSelection?.provider === "codex"
@@ -1550,9 +1555,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             }),
           { concurrency: 1 },
         );
+        const routedInput =
+          input.input !== undefined ? withCodexBrowserUsePromptHint(input.input) : undefined;
         const managerInput = {
           threadId: input.threadId,
-          ...(input.input !== undefined ? { input: input.input } : {}),
+          ...(routedInput !== undefined ? { input: routedInput } : {}),
           ...(input.skills !== undefined ? { skills: input.skills } : {}),
           ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
           ...(input.modelSelection?.provider === "codex"

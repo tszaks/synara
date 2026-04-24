@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest";
 import { groupCommandItems, type ComposerCommandItem } from "./ComposerCommandMenu";
 
 describe("groupCommandItems", () => {
-  it("groups mention suggestions as plugins, local, then subagents", () => {
+  it("groups mention suggestions as browser, plugins, local, then subagents", () => {
     const items: ComposerCommandItem[] = [
+      {
+        id: "browser",
+        type: "browser",
+        label: "@browser",
+        description: "Use DP Code's in-app browser",
+      },
       {
         id: "agent:codex:mini",
         type: "agent",
@@ -57,19 +63,24 @@ describe("groupCommandItems", () => {
 
     expect(groupCommandItems(items, "mention", true)).toEqual([
       {
+        id: "browser",
+        label: "Browser",
+        items: [items[0]],
+      },
+      {
         id: "plugins",
         label: "Plugins",
-        items: [items[2]],
+        items: [items[3]],
       },
       {
         id: "local",
         label: "Local",
-        items: [items[1], items[3]],
+        items: [items[2], items[4]],
       },
       {
         id: "subagents",
         label: "Subagents",
-        items: [items[0]],
+        items: [items[1]],
       },
     ]);
   });

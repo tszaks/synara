@@ -45,6 +45,8 @@ type SearchableModelOption = {
   searchUpstreamProvider: string;
 };
 
+const BROWSER_MENTION_SEARCH_BLOB = "browser iab in app internal web page tab screenshot visual";
+
 export function useComposerCommandMenuItems(input: {
   composerTrigger: ComposerTrigger | null;
   provider: ProviderKind;
@@ -80,6 +82,18 @@ export function useComposerCommandMenuItems(input: {
     // Keep trigger-specific discovery outside ChatView so the view mostly orchestrates state.
     if (composerTrigger.kind === "mention") {
       const query = normalizeProviderDiscoveryText(composerTrigger.query);
+
+      const browserItems: ComposerCommandItem[] =
+        query.length === 0 || BROWSER_MENTION_SEARCH_BLOB.includes(query)
+          ? [
+              {
+                id: "browser",
+                type: "browser" as const,
+                label: "@browser",
+                description: "Use DP Code's in-app browser",
+              },
+            ]
+          : [];
 
       const agentItems: ComposerCommandItem[] = (() => {
         // Use dynamic agents when available, fallback to static
@@ -151,9 +165,9 @@ export function useComposerCommandMenuItems(input: {
         label: basenameOfPath(entry.path),
         description: entry.parentPath ?? "",
       }));
-      // Keep mention suggestions ordered by primary intent: plugins first,
-      // then local context, then subagent delegation targets.
-      return [...pluginItems, ...localRootItems, ...pathItems, ...agentItems];
+      // Keep mention suggestions ordered by primary intent: native app targets,
+      // plugins, local context, then subagent delegation targets.
+      return [...browserItems, ...pluginItems, ...localRootItems, ...pathItems, ...agentItems];
     }
 
     if (composerTrigger.kind === "slash-command") {

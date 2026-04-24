@@ -8,13 +8,27 @@ import * as Net from "node:net";
 import * as OS from "node:os";
 import * as Path from "node:path";
 
-import type { BrowserExecuteCdpInput, ThreadId } from "@t3tools/contracts";
+import type {
+  BrowserCaptureScreenshotResult,
+  BrowserExecuteCdpInput,
+  ThreadBrowserState,
+  ThreadId,
+} from "@t3tools/contracts";
+import {
+  DPCODE_BROWSER_USE_IAB_PIPE_PATH,
+  DPCODE_BROWSER_USE_IAB_PIPE_PATHS,
+} from "@t3tools/shared/browserUse";
 
-import { DesktopBrowserManager } from "./browserManager";
+import type { DesktopBrowserManager } from "./browserManager";
+import { BrowserUsePolicy } from "./browserUsePolicy";
 
 const BROWSER_USE_HEADER_BYTES = 4;
-const BROWSER_USE_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+const BROWSER_USE_MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
 const BROWSER_USE_INITIAL_URL = "about:blank";
+const BROWSER_USE_BACKEND_NAME = "DP Code In-app Browser";
+const BROWSER_USE_BACKEND_VERSION = "0.1.0";
+const BROWSER_USE_PANEL_READY_TIMEOUT_MS = 3_000;
+const BROWSER_USE_PANEL_READY_POLL_MS = 50;
 
 type BrowserUseRpcId = string | number;
 
@@ -30,14 +44,32 @@ interface BrowserUseTrackedTab {
   tabId: string;
 }
 
-function resolveDefaultBrowserUsePipePath(platform = process.platform): string {
-  if (platform === "win32") {
-    return String.raw`\\.\pipe\codex-browser-use`;
-  }
-  return "/tmp/codex-browser-use";
+interface BrowserUseTabInfo {
+  id: number;
+  title: string;
+  active: boolean;
+  url: string;
 }
 
-export const DPCODE_BROWSER_USE_PIPE_PATH = resolveDefaultBrowserUsePipePath();
+interface BrowserUseUserTabInfo extends BrowserUseTabInfo {
+  lastOpened?: string;
+}
+
+interface BrowserUseScreenshotResult {
+  name: string;
+  mimeType: "image/png";
+  sizeBytes: number;
+  data: string;
+}
+
+interface BrowserUsePipeServerOptions {
+  readonly pipePaths?: string | readonly string[];
+  readonly policy?: BrowserUsePolicy;
+  readonly requestOpenPanel?: () => void | Promise<void>;
+}
+
+export const DPCODE_BROWSER_USE_PIPE_PATH = DPCODE_BROWSER_USE_IAB_PIPE_PATH;
+export const DPCODE_BROWSER_USE_PIPE_PATHS = DPCODE_BROWSER_USE_IAB_PIPE_PATHS;
 
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -50,8 +82,18 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function asNumber(value: unknown): number | null {
+function asFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asPositiveInteger(value: unknown): number | null {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim().length > 0
+        ? Number(value)
+        : NaN;
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
 }
 
 function requireSessionId(params: unknown): string {
@@ -101,7 +143,20 @@ function ensurePipeParentDirectory(pipePath: string): void {
   if (process.platform === "win32") {
     return;
   }
-  FS.mkdirSync(Path.dirname(pipePath), { recursive: true });
+  const parentDirectory = Path.dirname(pipePath);
+  try {
+    const stat = FS.statSync(parentDirectory);
+    if (stat.isDirectory()) {
+      return;
+    }
+    FS.unlinkSync(parentDirectory);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      throw error;
+    }
+  }
+  FS.mkdirSync(parentDirectory, { recursive: true });
 }
 
 function cleanupPipePath(pipePath: string): void {
@@ -121,31 +176,50 @@ export class BrowserUsePipeServer {
   private readonly trackedTabByKey = new Map<string, BrowserUseTrackedTab>();
   private readonly trackedTabById = new Map<number, BrowserUseTrackedTab>();
   private readonly selectedTrackedTabIdBySessionId = new Map<string, number>();
+  private readonly createdTrackedTabIdsBySessionId = new Map<string, Set<number>>();
   private readonly cdpListenerDisposeBySessionId = new Map<string, () => void>();
-  private readonly server: Net.Server;
+  private readonly servers = new Map<string, Net.Server>();
+  private readonly pipePaths: readonly string[];
+  private readonly policy: BrowserUsePolicy;
+  private readonly requestOpenPanel?: () => void | Promise<void>;
   private nextTrackedTabId = 1;
   private started = false;
 
   constructor(
     private readonly browserManager: DesktopBrowserManager,
-    private readonly pipePath = DPCODE_BROWSER_USE_PIPE_PATH,
+    options: BrowserUsePipeServerOptions | string | readonly string[] = {},
   ) {
-    this.server = Net.createServer((socket) => this.handleSocketConnection(socket));
+    const pipePaths =
+      typeof options === "string" || Array.isArray(options)
+        ? options
+        : options.pipePaths ?? DPCODE_BROWSER_USE_PIPE_PATHS;
+    const normalizedPipePaths = (Array.isArray(pipePaths) ? pipePaths : [pipePaths]).filter(
+      (pipePath) => pipePath.trim().length > 0,
+    );
+    this.pipePaths = [...new Set(normalizedPipePaths)];
+    this.policy =
+      typeof options === "object" && !Array.isArray(options)
+        ? (options.policy ?? new BrowserUsePolicy())
+        : new BrowserUsePolicy();
+    this.requestOpenPanel =
+      typeof options === "object" && !Array.isArray(options) ? options.requestOpenPanel : undefined;
   }
 
   async start(): Promise<void> {
     if (this.started) {
       return;
     }
-    ensurePipeParentDirectory(this.pipePath);
-    cleanupPipePath(this.pipePath);
-    await new Promise<void>((resolve, reject) => {
-      this.server.once("error", reject);
-      this.server.listen(this.pipePath, () => {
-        this.server.off("error", reject);
-        resolve();
-      });
-    });
+    const errors: Error[] = [];
+    for (const pipePath of this.pipePaths) {
+      try {
+        await this.startPipe(pipePath);
+      } catch (error) {
+        errors.push(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+    if (this.servers.size === 0) {
+      throw errors[0] ?? new Error("No browser-use pipe paths were configured.");
+    }
     this.started = true;
   }
 
@@ -160,12 +234,40 @@ export class BrowserUsePipeServer {
     this.sockets.clear();
     this.pendingBySocket.clear();
     if (this.started) {
-      await new Promise<void>((resolve) => {
-        this.server.close(() => resolve());
-      });
+      await Promise.all(
+        [...this.servers.values()].map(
+          (server) =>
+            new Promise<void>((resolve) => {
+              server.close(() => resolve());
+            }),
+        ),
+      );
       this.started = false;
     }
-    cleanupPipePath(this.pipePath);
+    for (const pipePath of this.servers.keys()) {
+      cleanupPipePath(pipePath);
+    }
+    this.servers.clear();
+    this.selectedTrackedTabIdBySessionId.clear();
+    this.createdTrackedTabIdsBySessionId.clear();
+    this.trackedTabByKey.clear();
+    this.trackedTabById.clear();
+  }
+
+  // Opens one Codex-compatible JSON-RPC socket; exposing one route-scoped IAB
+  // backend avoids Codex treating duplicate sockets as competing owners.
+  private async startPipe(pipePath: string): Promise<void> {
+    ensurePipeParentDirectory(pipePath);
+    cleanupPipePath(pipePath);
+    const server = Net.createServer((socket) => this.handleSocketConnection(socket));
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(pipePath, () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    this.servers.set(pipePath, server);
   }
 
   private handleSocketConnection(socket: Net.Socket): void {
@@ -232,25 +334,31 @@ export class BrowserUsePipeServer {
       case "ping":
         return "pong";
       case "getInfo":
-        return {
-          name: "DP Code In-app Browser",
-          version: "0.1.0",
-          type: "iab",
-        };
+        return this.getInfo(params);
       case "getTabs":
         return this.getTabsForSession(requireSessionId(params));
+      case "getUserTabs":
+        return this.getUserTabsForSession(requireSessionId(params));
+      case "claimUserTab":
+        return this.claimUserTabForSession(requireSessionId(params), params);
       case "createTab":
         return this.createTabForSession(requireSessionId(params));
+      case "finalizeTabs":
+        return this.finalizeTabsForSession(requireSessionId(params), params);
       case "nameSession":
         requireSessionId(params);
         if (!asString(asObject(params)?.name)) {
           throw new Error("nameSession requires a name");
         }
         return {};
+      case "moveMouse":
+        return this.moveMouseForSession(requireSessionId(params), params);
       case "attach":
         return this.attachForSession(requireSessionId(params), params);
       case "detach":
         return this.detachForSession(requireSessionId(params));
+      case "captureScreenshot":
+        return this.captureScreenshotForSession(requireSessionId(params), params);
       case "executeCdp":
         return this.executeCdpForSession(requireSessionId(params), params);
       default:
@@ -258,15 +366,70 @@ export class BrowserUsePipeServer {
     }
   }
 
+  private getInfo(params: unknown): {
+    name: string;
+    version: string;
+    type: "iab";
+    capabilities: { fileUploads: true };
+    metadata?: { codexSessionId: string };
+  } {
+    const sessionId = asString(asObject(params)?.session_id);
+    return {
+      name: BROWSER_USE_BACKEND_NAME,
+      version: BROWSER_USE_BACKEND_VERSION,
+      type: "iab",
+      capabilities: { fileUploads: true },
+      ...(sessionId ? { metadata: { codexSessionId: sessionId } } : {}),
+    };
+  }
+
   private getActiveBrowserHostState(): {
     threadId: ThreadId;
-    state: ReturnType<DesktopBrowserManager["getState"]>;
+    state: ThreadBrowserState;
   } | null {
     const snapshot = this.browserManager.getBrowserUseSnapshot();
     if (!snapshot || !snapshot.state.open) {
       return null;
     }
     return snapshot;
+  }
+
+  private async waitForActiveBrowserHostState(): Promise<{
+    threadId: ThreadId;
+    state: ThreadBrowserState;
+  } | null> {
+    const existing = this.getActiveBrowserHostState();
+    if (existing) {
+      return existing;
+    }
+    await this.requestOpenPanel?.();
+    const deadline = Date.now() + BROWSER_USE_PANEL_READY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const snapshot = this.getActiveBrowserHostState();
+      if (snapshot) {
+        return snapshot;
+      }
+      await new Promise((resolve) => setTimeout(resolve, BROWSER_USE_PANEL_READY_POLL_MS));
+    }
+    return this.getActiveBrowserHostState();
+  }
+
+  private toBrowserUseTabInfo(
+    sessionId: string,
+    threadId: ThreadId,
+    state: ThreadBrowserState,
+    tab: ThreadBrowserState["tabs"][number],
+  ): BrowserUseTabInfo {
+    const tracked = this.trackTab(threadId, tab.id);
+    const selectedTrackedTabId = this.selectedTrackedTabIdBySessionId.get(sessionId) ?? null;
+    return {
+      id: tracked.id,
+      title: tab.title,
+      active:
+        selectedTrackedTabId === tracked.id ||
+        (selectedTrackedTabId === null && state.activeTabId === tab.id),
+      url: tab.lastCommittedUrl ?? tab.url,
+    };
   }
 
   private trackTab(threadId: ThreadId, tabId: string): BrowserUseTrackedTab {
@@ -286,37 +449,44 @@ export class BrowserUsePipeServer {
     return tracked;
   }
 
-  private getTabsForSession(sessionId: string): Array<{
-    id: number;
-    title: string;
-    active: boolean;
-    url: string;
-  }> {
+  private getTabsForSession(sessionId: string): BrowserUseTabInfo[] {
     const snapshot = this.getActiveBrowserHostState();
     if (!snapshot) {
       return [];
     }
-    const selectedTrackedTabId = this.selectedTrackedTabIdBySessionId.get(sessionId) ?? null;
-    return snapshot.state.tabs.map((tab) => {
-      const tracked = this.trackTab(snapshot.threadId, tab.id);
-      return {
-        id: tracked.id,
-        title: tab.title,
-        active:
-          selectedTrackedTabId === tracked.id ||
-          (selectedTrackedTabId === null && snapshot.state.activeTabId === tab.id),
-        url: tab.lastCommittedUrl ?? tab.url,
-      };
-    });
+    return snapshot.state.tabs.map((tab) =>
+      this.toBrowserUseTabInfo(sessionId, snapshot.threadId, snapshot.state, tab),
+    );
   }
 
-  private async createTabForSession(sessionId: string): Promise<{
-    id: number;
-    title: string;
-    active: boolean;
-    url: string;
-  }> {
-    const snapshot = this.getActiveBrowserHostState();
+  private getUserTabsForSession(sessionId: string): BrowserUseUserTabInfo[] {
+    const now = new Date().toISOString();
+    return this.getTabsForSession(sessionId).map((tab) => ({ ...tab, lastOpened: now }));
+  }
+
+  private claimUserTabForSession(sessionId: string, params: unknown): BrowserUseTabInfo {
+    const trackedTabId = asPositiveInteger(asObject(params)?.tabId);
+    if (trackedTabId === null) {
+      throw new Error("claimUserTab requires a positive integer tabId");
+    }
+    const tracked = this.trackedTabById.get(trackedTabId);
+    if (!tracked) {
+      throw new Error(`Unknown user tab: ${trackedTabId}`);
+    }
+    const nextState = this.browserManager.selectTab({
+      threadId: tracked.threadId,
+      tabId: tracked.tabId,
+    });
+    const tab = nextState.tabs.find((candidate) => candidate.id === tracked.tabId);
+    if (!tab) {
+      throw new Error(`Tab no longer exists: ${trackedTabId}`);
+    }
+    this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
+    return this.toBrowserUseTabInfo(sessionId, tracked.threadId, nextState, tab);
+  }
+
+  private async createTabForSession(sessionId: string): Promise<BrowserUseTabInfo> {
+    const snapshot = await this.waitForActiveBrowserHostState();
     if (!snapshot) {
       throw new Error("No active DP Code browser pane available");
     }
@@ -332,6 +502,7 @@ export class BrowserUsePipeServer {
     }
     const tracked = this.trackTab(snapshot.threadId, activeTab.id);
     this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
+    this.rememberCreatedTab(sessionId, tracked.id);
     return {
       id: tracked.id,
       title: activeTab.title,
@@ -341,7 +512,7 @@ export class BrowserUsePipeServer {
   }
 
   private resolveTrackedTabForSession(sessionId: string, params: unknown): BrowserUseTrackedTab {
-    const requestedTrackedTabId = asNumber(asObject(params)?.tabId);
+    const requestedTrackedTabId = asPositiveInteger(asObject(params)?.tabId);
     const trackedTabId =
       requestedTrackedTabId ?? this.selectedTrackedTabIdBySessionId.get(sessionId) ?? null;
     if (trackedTabId === null) {
@@ -352,6 +523,77 @@ export class BrowserUsePipeServer {
       throw new Error(`Unknown tab: ${trackedTabId}`);
     }
     return tracked;
+  }
+
+  private async finalizeTabsForSession(
+    sessionId: string,
+    params: unknown,
+  ): Promise<Record<string, never>> {
+    const keepEntries = asObject(params)?.keep;
+    const keepTrackedTabIds = new Set<number>();
+    if (Array.isArray(keepEntries)) {
+      for (const entry of keepEntries) {
+        const tabId = asPositiveInteger(asObject(entry)?.tabId);
+        if (tabId !== null) {
+          keepTrackedTabIds.add(tabId);
+        }
+      }
+    }
+
+    const createdTrackedTabIds = this.createdTrackedTabIdsBySessionId.get(sessionId);
+    if (!createdTrackedTabIds || createdTrackedTabIds.size === 0) {
+      return {};
+    }
+
+    for (const trackedTabId of [...createdTrackedTabIds]) {
+      if (keepTrackedTabIds.has(trackedTabId)) {
+        continue;
+      }
+      const tracked = this.trackedTabById.get(trackedTabId);
+      if (!tracked) {
+        createdTrackedTabIds.delete(trackedTabId);
+        continue;
+      }
+      try {
+        this.browserManager.closeTab({ threadId: tracked.threadId, tabId: tracked.tabId });
+        this.forgetTrackedTab(tracked);
+      } catch {
+        // Finalization is best-effort; stale tabs are cleaned from the local mapping.
+        this.forgetTrackedTab(tracked);
+      }
+    }
+
+    if (createdTrackedTabIds.size === 0) {
+      this.createdTrackedTabIdsBySessionId.delete(sessionId);
+    }
+    const selectedTrackedTabId = this.selectedTrackedTabIdBySessionId.get(sessionId);
+    if (selectedTrackedTabId !== undefined && !keepTrackedTabIds.has(selectedTrackedTabId)) {
+      this.selectedTrackedTabIdBySessionId.delete(sessionId);
+    }
+    return {};
+  }
+
+  private rememberCreatedTab(sessionId: string, trackedTabId: number): void {
+    const createdTrackedTabIds =
+      this.createdTrackedTabIdsBySessionId.get(sessionId) ?? new Set<number>();
+    createdTrackedTabIds.add(trackedTabId);
+    this.createdTrackedTabIdsBySessionId.set(sessionId, createdTrackedTabIds);
+  }
+
+  private forgetTrackedTab(tracked: BrowserUseTrackedTab): void {
+    this.trackedTabById.delete(tracked.id);
+    this.trackedTabByKey.delete(`${tracked.threadId}:${tracked.tabId}`);
+    for (const [sessionId, createdTrackedTabIds] of this.createdTrackedTabIdsBySessionId) {
+      createdTrackedTabIds.delete(tracked.id);
+      if (createdTrackedTabIds.size === 0) {
+        this.createdTrackedTabIdsBySessionId.delete(sessionId);
+      }
+    }
+    for (const [sessionId, selectedTrackedTabId] of this.selectedTrackedTabIdBySessionId) {
+      if (selectedTrackedTabId === tracked.id) {
+        this.selectedTrackedTabIdBySessionId.delete(sessionId);
+      }
+    }
   }
 
   private async attachForSession(
@@ -390,6 +632,46 @@ export class BrowserUsePipeServer {
     return {};
   }
 
+  private async captureScreenshotForSession(
+    sessionId: string,
+    params: unknown,
+  ): Promise<BrowserUseScreenshotResult> {
+    const tracked = this.resolveTrackedTabForSession(sessionId, params);
+    this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
+    const screenshot = (await this.browserManager.captureScreenshot({
+      threadId: tracked.threadId,
+      tabId: tracked.tabId,
+    })) as BrowserCaptureScreenshotResult;
+
+    return {
+      name: screenshot.name,
+      mimeType: screenshot.mimeType,
+      sizeBytes: screenshot.sizeBytes,
+      data: Buffer.from(screenshot.bytes).toString("base64"),
+    };
+  }
+
+  private async moveMouseForSession(
+    sessionId: string,
+    params: unknown,
+  ): Promise<Record<string, never>> {
+    const request = asObject(params);
+    const x = asFiniteNumber(request?.x);
+    const y = asFiniteNumber(request?.y);
+    if (x === null || y === null) {
+      throw new Error("moveMouse requires finite x and y coordinates");
+    }
+    const tracked = this.resolveTrackedTabForSession(sessionId, params);
+    this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
+    await this.browserManager.moveBrowserUseMouse({
+      threadId: tracked.threadId,
+      tabId: tracked.tabId,
+      x,
+      y,
+    });
+    return {};
+  }
+
   private async executeCdpForSession(sessionId: string, params: unknown): Promise<unknown> {
     const request = asObject(params);
     const method = asString(request?.method);
@@ -398,13 +680,33 @@ export class BrowserUsePipeServer {
     }
     const tracked = this.resolveTrackedTabForSession(sessionId, asObject(request?.target) ?? null);
     this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
+    if (method === "Page.close") {
+      this.browserManager.closeTab({ threadId: tracked.threadId, tabId: tracked.tabId });
+      this.forgetTrackedTab(tracked);
+      return {};
+    }
     const commandParams = asObject(request?.commandParams);
+    this.assertCdpCommandAllowed(method, commandParams);
     return this.browserManager.executeCdp({
       threadId: tracked.threadId,
       tabId: tracked.tabId,
       method,
       ...(commandParams ? { params: commandParams } : {}),
     } satisfies BrowserExecuteCdpInput);
+  }
+
+  private assertCdpCommandAllowed(
+    method: string,
+    commandParams: Record<string, unknown> | null,
+  ): void {
+    if (method !== "Page.navigate") {
+      return;
+    }
+    const url = asString(commandParams?.url);
+    if (!url) {
+      throw new Error("Page.navigate requires a URL.");
+    }
+    this.policy.assertUrlAllowed(url);
   }
 
   private broadcastNotification(method: string, params: unknown): void {

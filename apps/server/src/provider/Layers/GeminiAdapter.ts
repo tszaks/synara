@@ -53,6 +53,11 @@ import {
 } from "../Errors.ts";
 import { probeGeminiCapabilities } from "../geminiAcpProbe.ts";
 import { GeminiAdapter, type GeminiAdapterShape } from "../Services/GeminiAdapter.ts";
+import {
+  DPCODE_BROWSER_USE_MCP_SERVER_NAME,
+  resolveBrowserUseMcpProcessConfig,
+  withBrowserUsePromptHint,
+} from "../browserUseTooling.ts";
 import { asArray, asNumber, asRecord, asString, trimToUndefined } from "../geminiValue.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -726,13 +731,29 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       ...(input.selectedModel ? [input.selectedModel] : []),
     ];
     const aliases = buildGeminiThinkingModelConfigAliases(candidateModels);
-
-    if (Object.keys(aliases).length === 0) {
-      return {
-        env: process.env,
-        systemSettingsPath: undefined,
-      };
-    }
+    const browserUseMcp = resolveBrowserUseMcpProcessConfig({
+      provider: PROVIDER,
+      threadId: input.threadId,
+    });
+    const settings = {
+      ...(Object.keys(aliases).length > 0
+        ? {
+            modelConfigs: {
+              aliases,
+            },
+          }
+        : {}),
+      mcpServers: {
+        [DPCODE_BROWSER_USE_MCP_SERVER_NAME]: {
+          command: browserUseMcp.command,
+          args: browserUseMcp.args,
+          env: browserUseMcp.env,
+          timeout: 60_000,
+          trust: true,
+          description: "Control the DP Code in-app browser.",
+        },
+      },
+    };
 
     const systemSettingsPath = path.join(
       DPCODE_GEMINI_SETTINGS_DIR,
@@ -743,15 +764,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         await fs.mkdir(DPCODE_GEMINI_SETTINGS_DIR, { recursive: true });
         await fs.writeFile(
           systemSettingsPath,
-          JSON.stringify(
-            {
-              modelConfigs: {
-                aliases,
-              },
-            },
-            null,
-            2,
-          ),
+          JSON.stringify(settings, null, 2),
           "utf8",
         );
       },
@@ -1868,23 +1881,23 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
           ? sendRequest<Record<string, unknown>>(context, "session/load", {
               sessionId: input.resumeSessionId,
               cwd: context.session.cwd ?? process.cwd(),
-              mcpServers: [],
+              mcpServers: [DPCODE_BROWSER_USE_MCP_SERVER_NAME],
             }).pipe(
               Effect.catch(() =>
                 sendRequest<Record<string, unknown>>(context, "session/new", {
                   cwd: context.session.cwd ?? process.cwd(),
-                  mcpServers: [],
+                  mcpServers: [DPCODE_BROWSER_USE_MCP_SERVER_NAME],
                 }),
               ),
             )
           : sendRequest<Record<string, unknown>>(context, "session/load", {
               sessionId: input.resumeSessionId,
               cwd: context.session.cwd ?? process.cwd(),
-              mcpServers: [],
+              mcpServers: [DPCODE_BROWSER_USE_MCP_SERVER_NAME],
             })
         : sendRequest<Record<string, unknown>>(context, "session/new", {
             cwd: context.session.cwd ?? process.cwd(),
-            mcpServers: [],
+            mcpServers: [DPCODE_BROWSER_USE_MCP_SERVER_NAME],
           });
 
       context.sessionId = resolveStartedGeminiSessionId(input.resumeSessionId, startResponse) ?? "";
@@ -1970,7 +1983,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     if (trimToUndefined(input.input)) {
       blocks.push({
         type: "text",
-        text: trimToUndefined(input.input),
+        text: withBrowserUsePromptHint(trimToUndefined(input.input) ?? ""),
       });
     }
 

@@ -492,6 +492,12 @@ export function createWsNativeApi(): NativeApi {
           return;
         }
       },
+      attachWebview: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.attachWebview(input);
+        }
+        return cloneBrowserState(getFallbackBrowserState(input.threadId));
+      },
       copyScreenshotToClipboard: async (input) => {
         if (window.desktopBridge) {
           await window.desktopBridge.browser.copyScreenshotToClipboard(input);
@@ -504,6 +510,24 @@ export function createWsNativeApi(): NativeApi {
           return window.desktopBridge.browser.captureScreenshot(input);
         }
         throw new Error("Browser screenshots require the desktop app.");
+      },
+      clearCookies: async () => {
+        if (window.desktopBridge) {
+          await window.desktopBridge.browser.clearCookies();
+          return;
+        }
+      },
+      getBrowserUsePolicy: async () => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.getBrowserUsePolicy();
+        }
+        return { approvalMode: "always-ask", blockedDomains: [], allowedDomains: [] };
+      },
+      updateBrowserUsePolicy: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.updateBrowserUsePolicy(input);
+        }
+        return input;
       },
       executeCdp: async (input) => {
         if (window.desktopBridge) {

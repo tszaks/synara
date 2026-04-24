@@ -6,6 +6,7 @@
 import type { IpcMain, WebContents } from "electron";
 
 import type {
+  BrowserAttachWebviewInput,
   BrowserCaptureScreenshotResult,
   BrowserExecuteCdpInput,
   BrowserNavigateInput,
@@ -14,10 +15,12 @@ import type {
   BrowserSetPanelBoundsInput,
   BrowserTabInput,
   BrowserThreadInput,
+  BrowserUsePolicyState,
   ThreadBrowserState,
 } from "@t3tools/contracts";
 
 import type { DesktopBrowserManager } from "./browserManager";
+import type { BrowserUsePolicy } from "./browserUsePolicy";
 
 export const BROWSER_IPC_CHANNELS = {
   state: "desktop:browser-state",
@@ -26,8 +29,13 @@ export const BROWSER_IPC_CHANNELS = {
   hide: "desktop:browser-hide",
   getState: "desktop:browser-get-state",
   setBounds: "desktop:browser-set-bounds",
+  attachWebview: "desktop:browser-attach-webview",
   copyScreenshotToClipboard: "desktop:browser-copy-screenshot-to-clipboard",
   captureScreenshot: "desktop:browser-capture-screenshot",
+  clearCookies: "desktop:browser-clear-cookies",
+  requestOpenPanel: "desktop:browser-use-request-open-panel",
+  getBrowserUsePolicy: "desktop:browser-use-policy-get",
+  updateBrowserUsePolicy: "desktop:browser-use-policy-update",
   executeCdp: "desktop:browser-execute-cdp",
   navigate: "desktop:browser-navigate",
   reload: "desktop:browser-reload",
@@ -51,6 +59,7 @@ export function sendBrowserState(
 export function registerBrowserIpcHandlers(
   ipcMain: IpcMain,
   browserManager: DesktopBrowserManager,
+  browserUsePolicy: BrowserUsePolicy,
 ): void {
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.open);
   ipcMain.handle(BROWSER_IPC_CHANNELS.open, async (_event, input: BrowserOpenInput) =>
@@ -78,6 +87,12 @@ export function registerBrowserIpcHandlers(
     browserManager.setPanelBounds(input);
   });
 
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.attachWebview);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.attachWebview,
+    async (_event, input: BrowserAttachWebviewInput) => browserManager.attachWebview(input),
+  );
+
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.captureScreenshot);
   ipcMain.handle(
     BROWSER_IPC_CHANNELS.captureScreenshot,
@@ -91,6 +106,20 @@ export function registerBrowserIpcHandlers(
     async (_event, input: BrowserTabInput) => {
       await browserManager.copyScreenshotToClipboard(input);
     },
+  );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.clearCookies);
+  ipcMain.handle(BROWSER_IPC_CHANNELS.clearCookies, async () => {
+    await browserManager.clearCookies();
+  });
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.getBrowserUsePolicy);
+  ipcMain.handle(BROWSER_IPC_CHANNELS.getBrowserUsePolicy, async () => browserUsePolicy.read());
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.updateBrowserUsePolicy);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.updateBrowserUsePolicy,
+    async (_event, input: BrowserUsePolicyState) => browserUsePolicy.update(input),
   );
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.executeCdp);

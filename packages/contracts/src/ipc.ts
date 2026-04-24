@@ -200,11 +200,23 @@ export interface BrowserSetPanelBoundsInput {
   bounds: BrowserPanelBounds | null;
 }
 
+export interface BrowserAttachWebviewInput extends BrowserTabInput {
+  webContentsId: number;
+}
+
 export interface BrowserCaptureScreenshotResult {
   name: string;
   mimeType: "image/png";
   sizeBytes: number;
   bytes: Uint8Array;
+}
+
+export type BrowserUseApprovalMode = "always-ask" | "allowed-domains";
+
+export interface BrowserUsePolicyState {
+  approvalMode: BrowserUseApprovalMode;
+  blockedDomains: string[];
+  allowedDomains: string[];
 }
 
 export interface BrowserExecuteCdpInput extends BrowserTabInput {
@@ -254,8 +266,12 @@ export interface DesktopBridge {
     hide: (input: BrowserThreadInput) => Promise<void>;
     getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
     setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
+    attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
     copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
     captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
+    clearCookies: () => Promise<void>;
+    getBrowserUsePolicy: () => Promise<BrowserUsePolicyState>;
+    updateBrowserUsePolicy: (input: BrowserUsePolicyState) => Promise<BrowserUsePolicyState>;
     executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
     navigate: (input: BrowserNavigateInput) => Promise<ThreadBrowserState>;
     reload: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
@@ -266,6 +282,7 @@ export interface DesktopBridge {
     selectTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
     openDevTools: (input: BrowserTabInput) => Promise<void>;
     onState: (listener: (state: ThreadBrowserState) => void) => () => void;
+    onBrowserUseOpenPanelRequest: (listener: () => void) => () => void;
   };
 }
 
@@ -381,8 +398,12 @@ export interface NativeApi {
     hide: (input: BrowserThreadInput) => Promise<void>;
     getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
     setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
+    attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
     copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
     captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
+    clearCookies: () => Promise<void>;
+    getBrowserUsePolicy: () => Promise<BrowserUsePolicyState>;
+    updateBrowserUsePolicy: (input: BrowserUsePolicyState) => Promise<BrowserUsePolicyState>;
     executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
     navigate: (input: BrowserNavigateInput) => Promise<ThreadBrowserState>;
     reload: (input: BrowserTabInput) => Promise<ThreadBrowserState>;

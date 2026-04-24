@@ -48,6 +48,8 @@ function makeProvider(input: {
 function createMockOpenCodeRuntime() {
   const abortCalls: Array<{ sessionID: string }> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
+  const mcpAddCalls: Array<Record<string, unknown>> = [];
+  const mcpConnectCalls: Array<Record<string, unknown>> = [];
   const emptySubscription = {
     async *[Symbol.asyncIterator]() {
       // No provider-side events needed for these adapter lifecycle tests.
@@ -56,6 +58,16 @@ function createMockOpenCodeRuntime() {
   const client = {
     event: {
       subscribe: async () => ({ stream: emptySubscription }),
+    },
+    mcp: {
+      add: async (input: Record<string, unknown>) => {
+        mcpAddCalls.push(input);
+        return { data: null };
+      },
+      connect: async (input: Record<string, unknown>) => {
+        mcpConnectCalls.push(input);
+        return { data: null };
+      },
     },
     session: {
       create: async () => ({ data: { id: "opencode-session-1" } }),
@@ -109,7 +121,7 @@ function createMockOpenCodeRuntime() {
     loadOpenCodeCredentialProviderIDs: () => Effect.succeed([]),
   };
 
-  return { abortCalls, promptCalls, runtime };
+  return { abortCalls, mcpAddCalls, mcpConnectCalls, promptCalls, runtime };
 }
 
 function createSubscribedEventQueue() {

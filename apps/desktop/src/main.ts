@@ -61,8 +61,9 @@ import {
 } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
-import { registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
+import { BROWSER_IPC_CHANNELS, registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
 import { BrowserUsePipeServer } from "./browserUsePipeServer";
+import { BrowserUsePolicy } from "./browserUsePolicy";
 import {
   DESKTOP_WS_URL_CHANNEL,
   normalizeDesktopWsUrl,
@@ -146,6 +147,7 @@ let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager();
+const browserUsePolicy = new BrowserUsePolicy();
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
 let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
 let configuredGitHubUpdateToken = "";
@@ -186,7 +188,12 @@ async function ensureBrowserUsePipeServer(): Promise<void> {
   if (browserUsePipeServer) {
     return;
   }
-  const server = new BrowserUsePipeServer(browserManager);
+  const server = new BrowserUsePipeServer(browserManager, {
+    policy: browserUsePolicy,
+    requestOpenPanel: () => {
+      mainWindow?.webContents.send(BROWSER_IPC_CHANNELS.requestOpenPanel);
+    },
+  });
   await server.start();
   browserUsePipeServer = server;
 }
@@ -1722,7 +1729,7 @@ function registerIpcHandlers(): void {
     console.warn("[DPCODE browser] Failed to start browser-use native pipe", error);
   });
 
-  registerBrowserIpcHandlers(ipcMain, browserManager);
+  registerBrowserIpcHandlers(ipcMain, browserManager, browserUsePolicy);
 }
 
 function getIconOption(): { icon: string } | Record<string, never> {
@@ -1752,6 +1759,7 @@ function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webviewTag: true,
     },
   });
   browserManager.setWindow(window);

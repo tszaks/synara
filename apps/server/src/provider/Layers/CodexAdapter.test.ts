@@ -296,6 +296,51 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       });
     }),
   );
+
+  it.effect("adds a native Browser Use route hint for Codex browser turns", () =>
+    Effect.gen(function* () {
+      sessionErrorManager.sendTurnImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* Effect.ignore(
+        adapter.sendTurn({
+          threadId: asThreadId("sess-missing"),
+          input: "Open https://emanueledipietro.com in the in-app browser and tell me the page title.",
+          attachments: [],
+        }),
+      );
+
+      const managerInput = sessionErrorManager.sendTurnImpl.mock.calls[0]?.[0];
+      assert.equal(managerInput?.threadId, asThreadId("sess-missing"));
+      assert.equal(managerInput?.input?.includes("native in-app browser tools"), true);
+      assert.equal(managerInput?.input?.includes("Do not use the bundled Browser Use skill"), true);
+      assert.equal(managerInput?.input?.includes("a Codex plugin"), true);
+      assert.equal(managerInput?.input?.includes("Do not answer this task from web search"), true);
+      assert.equal(managerInput?.input?.includes("https://emanueledipietro.com"), true);
+      assert.equal(managerInput?.mentions, undefined);
+    }),
+  );
+
+  it.effect("leaves non-browser Codex turns unchanged", () =>
+    Effect.gen(function* () {
+      sessionErrorManager.sendTurnImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* Effect.ignore(
+        adapter.sendTurn({
+          threadId: asThreadId("sess-missing"),
+          input: "Explain the ProviderManager lifecycle.",
+          attachments: [],
+        }),
+      );
+
+      assert.equal(
+        sessionErrorManager.sendTurnImpl.mock.calls[0]?.[0].input,
+        "Explain the ProviderManager lifecycle.",
+      );
+      assert.equal(sessionErrorManager.sendTurnImpl.mock.calls[0]?.[0].mentions, undefined);
+    }),
+  );
 });
 
 const lifecycleManager = new FakeCodexManager();

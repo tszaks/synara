@@ -66,6 +66,19 @@ function SkillCubeIcon(props: { className?: string }) {
   );
 }
 
+export function BrowserPointerIcon(props: { className?: string }) {
+  return (
+    <svg className={props.className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M3.45158 4.72779L9.06387 20.5551C9.36964 21.4174 10.577 21.4503 10.9293 20.6059L13.6196 14.157C13.721 13.9138 13.9143 13.7205 14.1575 13.6191L20.6064 10.9288C21.4508 10.5765 21.4179 9.36915 20.5556 9.06338L4.72828 3.45109C3.93501 3.1698 3.17029 3.93452 3.45158 4.72779Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function humanizeProviderCommandName(command: string): string {
   return command
     .split(/[-_]/g)
@@ -108,6 +121,10 @@ function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
     return "delegate task to subagent";
   }
 
+  if (item.type === "browser") {
+    return "Browser";
+  }
+
   if (item.type === "plugin") {
     return "Plugin";
   }
@@ -142,7 +159,12 @@ function commandMenuSecondaryText(item: ComposerCommandItem): string | null {
     return item.description;
   }
 
-  if (item.type === "plugin" || item.type === "skill" || item.type === "local-root") {
+  if (
+    item.type === "browser" ||
+    item.type === "plugin" ||
+    item.type === "skill" ||
+    item.type === "local-root"
+  ) {
     return item.description;
   }
 
@@ -161,6 +183,12 @@ export type ComposerCommandItem =
   | {
       id: string;
       type: "local-root";
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
+      type: "browser";
       label: string;
       description: string;
     }
@@ -242,11 +270,13 @@ export function groupCommandItems(
   groupSlashCommandSections: boolean,
 ): ComposerCommandGroupModel[] {
   if (triggerKind === "mention") {
+    const browserItems = items.filter((item) => item.type === "browser");
     const pluginItems = items.filter((item) => item.type === "plugin");
     const localItems = items.filter((item) => item.type === "local-root" || item.type === "path");
     const agentItems = items.filter((item) => item.type === "agent");
     const otherItems = items.filter(
       (item) =>
+        item.type !== "browser" &&
         item.type !== "plugin" &&
         item.type !== "local-root" &&
         item.type !== "path" &&
@@ -254,6 +284,9 @@ export function groupCommandItems(
     );
 
     const groups: ComposerCommandGroupModel[] = [];
+    if (browserItems.length > 0) {
+      groups.push({ id: "browser", label: "Browser", items: browserItems });
+    }
     if (pluginItems.length > 0) {
       groups.push({ id: "plugins", label: "Plugins", items: pluginItems });
     }
@@ -436,6 +469,9 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       {props.item.type === "local-root" ? (
         <TbDeviceLaptop className="size-3.5 text-muted-foreground/60" />
       ) : null}
+      {props.item.type === "browser" ? (
+        <BrowserPointerIcon className="size-3.5 text-muted-foreground/60" />
+      ) : null}
       {props.item.type === "fork-target" ? (
         props.item.target === "local" ? (
           <TbDeviceLaptop className="size-3.5 text-muted-foreground/60" />
@@ -504,7 +540,10 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           <span
             className={cn(
               "shrink-0 text-[11.5px] font-medium text-foreground/80",
-              (props.item.type === "plugin" || props.item.type === "skill") && "font-semibold",
+              (props.item.type === "browser" ||
+                props.item.type === "plugin" ||
+                props.item.type === "skill") &&
+                "font-semibold",
             )}
           >
             {props.item.type === "slash-command" || props.item.type === "provider-native-command"

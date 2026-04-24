@@ -10,6 +10,7 @@ import { version } from "../package.json" with { type: "json" };
 import { ServerLive } from "./wsServer";
 import { NetService } from "@t3tools/shared/Net";
 import { FetchHttpClient } from "effect/unstable/http";
+import { runBrowserUseMcpServer } from "./provider/browserUseMcpServer";
 
 const RuntimeLayer = Layer.empty.pipe(
   Layer.provideMerge(CliConfig.layer),
@@ -20,4 +21,13 @@ const RuntimeLayer = Layer.empty.pipe(
   Layer.provideMerge(FetchHttpClient.layer),
 );
 
-Command.run(t3Cli, { version }).pipe(Effect.provide(RuntimeLayer), NodeRuntime.runMain);
+if (process.argv[2] === "browser-use-mcp") {
+  runBrowserUseMcpServer()
+    .then(() => process.exit(0))
+    .catch((error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    });
+} else {
+  Command.run(t3Cli, { version }).pipe(Effect.provide(RuntimeLayer), NodeRuntime.runMain);
+}

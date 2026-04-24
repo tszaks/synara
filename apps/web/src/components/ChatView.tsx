@@ -93,6 +93,7 @@ import { isHomeChatContainerProject } from "../lib/chatProjects";
 import { resolveFirstSendTarget } from "../lib/chatFirstSend";
 import {
   maybeResolveBrowserPromptAttachment,
+  promptShouldOpenInternalBrowserPanel,
   type BrowserPromptAttachmentResolution,
 } from "../lib/browserPromptContext";
 import { dispatchThreadRename } from "../lib/threadRename";
@@ -2410,6 +2411,12 @@ export default function ChatView({
       },
     });
   }, [browserOpen, navigate, onToggleBrowserPanel, threadId]);
+  const openBrowserPanelIfNeeded = useCallback(() => {
+    if (resolvedBrowserOpen) {
+      return;
+    }
+    onToggleBrowser();
+  }, [onToggleBrowser, resolvedBrowserOpen]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -4661,6 +4668,9 @@ export default function ChatView({
       return false;
     }
     if (!activeProject) return false;
+    if (promptShouldOpenInternalBrowserPanel(promptForSend)) {
+      openBrowserPanelIfNeeded();
+    }
 
     const browserPromptAttachment: BrowserPromptAttachmentResolution =
       await maybeResolveBrowserPromptAttachment({
@@ -6268,6 +6278,15 @@ export default function ChatView({
         handleNavigateLocalFolder(localFolderBrowseRootPath ?? "/");
         return;
       }
+      if (item.type === "browser") {
+        openBrowserPanelIfNeeded();
+        applyComposerTriggerReplacement({
+          snapshot,
+          trigger,
+          base: "@browser ",
+        });
+        return;
+      }
       if (item.type === "slash-command") {
         handleSlashCommandSelection(item);
         return;
@@ -6347,6 +6366,7 @@ export default function ChatView({
       handleReviewTargetSelection,
       handleSlashCommandSelection,
       onProviderModelSelect,
+      openBrowserPanelIfNeeded,
       setComposerCommandPicker,
       localFolderBrowseRootPath,
       selectedProvider,

@@ -20,6 +20,7 @@ import {
   MAX_CUSTOM_MODEL_LENGTH,
   MIN_CHAT_FONT_SIZE_PX,
   MODEL_PROVIDER_SETTINGS,
+  normalizeBrowserUseDomains,
   normalizeChatFontSizePx,
   patchCustomModels,
   useAppSettings,
@@ -114,6 +115,10 @@ const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
   updated_at: "Recently active",
   created_at: "Newest first",
 } as const;
+
+function parseBrowserUseDomainList(value: string): string[] {
+  return normalizeBrowserUseDomains(value.split(/[,\n]/g));
+}
 
 type InstallBinarySettingsKey =
   | "claudeBinaryPath"
@@ -341,6 +346,12 @@ function SettingsRouteView() {
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState(
     readBrowserNotificationPermissionState(),
   );
+  const [blockedDomainsInput, setBlockedDomainsInput] = useState(
+    settings.browserUseBlockedDomains.join(", "),
+  );
+  const [allowedDomainsInput, setAllowedDomainsInput] = useState(
+    settings.browserUseAllowedDomains.join(", "),
+  );
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
@@ -460,6 +471,11 @@ function SettingsRouteView() {
     ...(settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose
       ? ["Terminal close confirmation"]
       : []),
+    ...(settings.browserUseApprovalMode !== defaults.browserUseApprovalMode ||
+    settings.browserUseBlockedDomains.length > 0 ||
+    settings.browserUseAllowedDomains.length > 0
+      ? ["Browser use"]
+      : []),
     ...(isGitTextGenerationModelDirty ? ["Git writing model"] : []),
     ...(settings.customCodexModels.length > 0 ||
     settings.customClaudeModels.length > 0 ||
@@ -496,6 +512,14 @@ function SettingsRouteView() {
   useEffect(() => {
     setBrowserNotificationPermission(readBrowserNotificationPermissionState());
   }, []);
+
+  useEffect(() => {
+    setBlockedDomainsInput(settings.browserUseBlockedDomains.join(", "));
+  }, [settings.browserUseBlockedDomains]);
+
+  useEffect(() => {
+    setAllowedDomainsInput(settings.browserUseAllowedDomains.join(", "));
+  }, [settings.browserUseAllowedDomains]);
 
   const addCustomModel = useCallback(
     (provider: ProviderKind) => {
@@ -656,6 +680,41 @@ function SettingsRouteView() {
       type: "success",
       title: "Test notification sent",
       description: "Your browser should show the notification.",
+    });
+  }
+
+  async function clearBrowserCookies() {
+    const api = readNativeApi() ?? ensureNativeApi();
+    const confirmed = await api.dialogs.confirm(
+      "Clear in-app browser cookies?\n\nThis signs websites out of the browser used by agents and the browser panel.",
+    );
+    if (!confirmed) return;
+
+    try {
+      await api.browser.clearCookies();
+      toastManager.add({
+        type: "success",
+        title: "Browser cookies cleared",
+        description: "The in-app browser cookie jar has been reset.",
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not clear cookies",
+        description: error instanceof Error ? error.message : "Unable to clear browser cookies.",
+      });
+    }
+  }
+
+  function commitBlockedDomainsInput() {
+    updateSettings({
+      browserUseBlockedDomains: parseBrowserUseDomainList(blockedDomainsInput),
+    });
+  }
+
+  function commitAllowedDomainsInput() {
+    updateSettings({
+      browserUseAllowedDomains: parseBrowserUseDomainList(allowedDomainsInput),
     });
   }
 
@@ -1420,6 +1479,120 @@ function SettingsRouteView() {
                 }
                 aria-label="Wrap diff lines by default"
               />
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="Browser use">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Approval"
+            description="Choose whether Browser Use can open only listed domains without a policy stop."
+            resetAction={
+              settings.browserUseApprovalMode !== defaults.browserUseApprovalMode ? (
+                <SettingResetButton
+                  label="browser approval"
+                  onClick={() =>
+                    updateSettings({
+                      browserUseApprovalMode: defaults.browserUseApprovalMode,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={settings.browserUseApprovalMode}
+                onValueChange={(value) => {
+                  if (value !== "always-ask" && value !== "allowed-domains") return;
+                  updateSettings({ browserUseApprovalMode: value });
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-48" aria-label="Browser Use approval mode">
+                  <SelectValue>
+                    {settings.browserUseApprovalMode === "allowed-domains"
+                      ? "Allowed domains only"
+                      : "Always ask"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem value="always-ask">Always ask</SelectItem>
+                  <SelectItem value="allowed-domains">Allowed domains only</SelectItem>
+                </SelectPopup>
+              </Select>
+            }
+          />
+
+          <SettingsRow
+            title="Blocked domains"
+            description="Browser Use will never open these domains or their subdomains."
+            resetAction={
+              settings.browserUseBlockedDomains.length > 0 ? (
+                <SettingResetButton
+                  label="blocked domains"
+                  onClick={() => {
+                    setBlockedDomainsInput("");
+                    updateSettings({ browserUseBlockedDomains: [] });
+                  }}
+                />
+              ) : null
+            }
+            control={
+              <Input
+                className="w-full sm:w-72"
+                value={blockedDomainsInput}
+                placeholder="example.com, internal.test"
+                onBlur={commitBlockedDomainsInput}
+                onChange={(event) => setBlockedDomainsInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.currentTarget.blur();
+                  }
+                }}
+                aria-label="Browser Use blocked domains"
+              />
+            }
+          />
+
+          <SettingsRow
+            title="Allowed domains"
+            description="Domains that Browser Use may open when approval is restricted."
+            resetAction={
+              settings.browserUseAllowedDomains.length > 0 ? (
+                <SettingResetButton
+                  label="allowed domains"
+                  onClick={() => {
+                    setAllowedDomainsInput("");
+                    updateSettings({ browserUseAllowedDomains: [] });
+                  }}
+                />
+              ) : null
+            }
+            control={
+              <Input
+                className="w-full sm:w-72"
+                value={allowedDomainsInput}
+                placeholder="openai.com, localhost"
+                onBlur={commitAllowedDomainsInput}
+                onChange={(event) => setAllowedDomainsInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.currentTarget.blur();
+                  }
+                }}
+                aria-label="Browser Use allowed domains"
+              />
+            }
+          />
+
+          <SettingsRow
+            title="Cookies"
+            description="Clear cookies from the in-app browser used by agents and the browser panel."
+            control={
+              <Button size="sm" variant="outline" onClick={() => void clearBrowserCookies()}>
+                Clear cookies
+              </Button>
             }
           />
         </div>

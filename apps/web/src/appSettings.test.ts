@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AppSettingsSchema,
+  DEFAULT_BROWSER_USE_APPROVAL_MODE,
   DEFAULT_CHAT_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
@@ -15,6 +16,7 @@ import {
   getGitTextGenerationModelOptions,
   getProviderStartOptions,
   MODEL_PROVIDER_SETTINGS,
+  normalizeBrowserUseDomains,
   normalizeChatFontSizePx,
   normalizeCustomModelSlugs,
   patchCustomModels,
@@ -410,6 +412,23 @@ describe("AppSettingsSchema", () => {
       customClaudeModels: [],
       customGeminiModels: [],
       customOpenCodeModels: [],
+      browserUseApprovalMode: DEFAULT_BROWSER_USE_APPROVAL_MODE,
+      browserUseBlockedDomains: [],
+      browserUseAllowedDomains: [],
     });
+  });
+
+  it("normalizes Browser Use domain settings from persisted values", () => {
+    expect(
+      normalizeBrowserUseDomains([
+        " https://Example.com/path ",
+        "example.com",
+        "",
+        ".INTERNAL.test.",
+      ]),
+    ).toEqual(["example.com", "internal.test"]);
+    expect(normalizeBrowserUseDomains(["https://OpenAI.com/docs", "openai.com"])).toEqual([
+      "openai.com",
+    ]);
   });
 });

@@ -325,6 +325,23 @@ describe("buildCodexProcessEnv", () => {
     expect(readEnvironment).not.toHaveBeenCalled();
     expect(env.AZURE_OPENAI_API_KEY).toBe("existing-secret");
   });
+
+  it("allows Codex browser-use to reach the canonical IAB socket", () => {
+    const env = buildCodexProcessEnv({
+      env: {
+        SHELL: "/bin/zsh",
+        PATH: "/usr/bin",
+        NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/existing.sock",
+      },
+      platform: "darwin",
+      readEnvironment: vi.fn(() => ({})),
+    });
+
+    expect(env.NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS?.split(",")).toEqual([
+      "/tmp/existing.sock",
+      "/tmp/codex-browser-use-iab.sock",
+    ]);
+  });
 });
 
 describe("handleStdoutLine", () => {

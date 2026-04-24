@@ -36,6 +36,11 @@ import {
 } from "../Errors.ts";
 import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
+  DPCODE_BROWSER_USE_MCP_SERVER_NAME,
+  resolveBrowserUseMcpProcessConfig,
+  withBrowserUsePromptHint,
+} from "../browserUseTooling.ts";
+import {
   buildOpenCodePermissionRules,
   type OpenCodeCliModelDescriptor,
   type OpenCodeInventory,
@@ -1455,6 +1460,29 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   directory,
                   ...(server.external && serverPassword ? { serverPassword } : {}),
                 });
+                const browserUseMcp = resolveBrowserUseMcpProcessConfig({
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                });
+                yield* runOpenCodeSdk("mcp.add", () =>
+                  client.mcp.add({
+                    directory,
+                    name: DPCODE_BROWSER_USE_MCP_SERVER_NAME,
+                    config: {
+                      type: "local",
+                      command: [browserUseMcp.command, ...browserUseMcp.args],
+                      environment: browserUseMcp.env,
+                      enabled: true,
+                      timeout: 60_000,
+                    },
+                  }),
+                );
+                yield* runOpenCodeSdk("mcp.connect", () =>
+                  client.mcp.connect({
+                    directory,
+                    name: DPCODE_BROWSER_USE_MCP_SERVER_NAME,
+                  }),
+                );
                 const openCodeSessionId =
                   resumedSessionId ??
                   (yield* runOpenCodeSdk("session.create", () =>
@@ -1568,6 +1596,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }
 
         const text = input.input?.trim();
+        const textWithBrowserTools = text ? withBrowserUsePromptHint(text) : undefined;
         const fileParts = toOpenCodeFileParts({
           attachments: input.attachments,
           resolveAttachmentPath: (attachment) =>
@@ -1618,7 +1647,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             model: parsedModel,
             ...(context.activeAgent ? { agent: context.activeAgent } : {}),
             ...(context.activeVariant ? { variant: context.activeVariant } : {}),
-            parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
+            parts: [
+              ...(textWithBrowserTools
+                ? [{ type: "text" as const, text: textWithBrowserTools }]
+                : []),
+              ...fileParts,
+            ],
           }),
         ).pipe(
           Effect.mapError(toRequestError),

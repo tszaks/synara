@@ -68,6 +68,10 @@
       "types": "./src/agentMentions.ts",
       "import": "./src/agentMentions.ts"
     },
+    "./browserUse": {
+      "types": "./src/browserUse.ts",
+      "import": "./src/browserUse.ts"
+    },
     "./worktreeHandoff": {
       "types": "./src/worktreeHandoff.ts",
       "import": "./src/worktreeHandoff.ts"

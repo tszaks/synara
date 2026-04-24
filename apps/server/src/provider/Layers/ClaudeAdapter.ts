@@ -65,6 +65,11 @@ import {
 } from "@t3tools/shared/model";
 import { buildClaudeSubagentPrompt } from "@t3tools/shared/agentMentions";
 import {
+  DPCODE_BROWSER_USE_MCP_SERVER_NAME,
+  DPCODE_BROWSER_USE_PROVIDER_PROMPT,
+  resolveBrowserUseMcpProcessConfig,
+} from "../browserUseTooling.ts";
+import {
   Cause,
   DateTime,
   Deferred,
@@ -704,6 +709,7 @@ const EMBEDDED_CLAUDE_SYSTEM_PROMPT_APPEND = [
   "Do not present the host app as Claude Code unless the user is explicitly asking about Claude Code.",
   "Treat the current working directory as the active workspace for the task.",
   "When the user asks about the current project, codebase, or repository, proactively inspect files in the current working directory before asking the user where to look.",
+  DPCODE_BROWSER_USE_PROVIDER_PROMPT,
 ].join("\n");
 
 function buildClaudeSdkSubagents(): Record<string, AgentDefinition> {
@@ -3147,6 +3153,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(fastMode ? { fastMode: true } : {}),
         };
         const claudeSubagents = buildClaudeSdkSubagents();
+        const browserUseMcp = resolveBrowserUseMcpProcessConfig({
+          provider: PROVIDER,
+          threadId: input.threadId,
+        });
 
         const queryOptions: ClaudeQueryOptions = {
           ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -3173,6 +3183,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ? { maxThinkingTokens: providerOptions.maxThinkingTokens }
             : {}),
           ...(Object.keys(settings).length > 0 ? { settings } : {}),
+          mcpServers: {
+            [DPCODE_BROWSER_USE_MCP_SERVER_NAME]: {
+              type: "stdio",
+              command: browserUseMcp.command,
+              args: browserUseMcp.args,
+              env: browserUseMcp.env,
+            },
+          },
           ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
           ...(newSessionId ? { sessionId: newSessionId } : {}),
           includePartialMessages: true,

@@ -16,6 +16,7 @@ const EXPLICIT_COMPUTER_USE_PATTERNS = [
 ];
 
 const INTERNAL_BROWSER_SCOPE_PATTERNS = [
+  "@browser",
   "browser interno",
   "internal browser",
   "browser in chat",
@@ -67,6 +68,14 @@ export function promptLooksLikeInternalBrowserTask(prompt: string): boolean {
     return false;
   }
   return INTERNAL_BROWSER_ACTION_PATTERNS.some((pattern) => normalized.includes(pattern));
+}
+
+export function promptShouldOpenInternalBrowserPanel(prompt: string): boolean {
+  if (promptRequestsExplicitComputerUse(prompt)) {
+    return false;
+  }
+  const normalized = normalizePromptForMatching(prompt);
+  return normalized.includes("@browser") || promptLooksLikeInternalBrowserTask(prompt);
 }
 
 export function screenshotAttachmentName(input: BrowserCaptureScreenshotResult): string {

@@ -41,6 +41,7 @@ import {
   type ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
 import { readActiveCodexProviderEnvKey } from "@t3tools/shared/codexConfig";
+import { DPCODE_BROWSER_USE_IAB_PIPE_PATHS } from "@t3tools/shared/browserUse";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import {
   readEnvironmentFromLoginShell,
@@ -55,6 +56,15 @@ import {
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
+import {
+  browserUseScreenshotDataUrl,
+  callBrowserUseTool,
+  isBrowserUseScreenshotResult,
+} from "./provider/browserUseMcpServer.ts";
+import {
+  DPCODE_BROWSER_USE_DYNAMIC_TOOL_NAMESPACE,
+  getBrowserUseDynamicToolSpecs,
+} from "./provider/browserUseTooling.ts";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 
 type PendingRequestKey = string;
@@ -238,8 +248,6 @@ const CODEX_DEFAULT_MODEL = "gpt-5.5";
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
-const CODEX_BROWSER_USE_PIPE_PATH =
-  process.platform === "win32" ? String.raw`\\.\pipe\codex-browser-use` : "/tmp/codex-browser-use";
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -296,10 +304,13 @@ export function buildCodexProcessEnv(
         ?.split(",")
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0) ?? [];
-    if (!allowedSockets.includes(CODEX_BROWSER_USE_PIPE_PATH)) {
+    const missingBrowserUseSockets = DPCODE_BROWSER_USE_IAB_PIPE_PATHS.filter(
+      (pipePath) => !allowedSockets.includes(pipePath),
+    );
+    if (missingBrowserUseSockets.length > 0) {
       effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS] = [
         ...allowedSockets,
-        CODEX_BROWSER_USE_PIPE_PATH,
+        ...missingBrowserUseSockets,
       ].join(",");
     }
   }
@@ -826,7 +837,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       const threadStartParams = {
         ...sessionOverrides,
+        dynamicTools: getBrowserUseDynamicToolSpecs(),
         experimentalRawEvents: false,
+        persistExtendedHistory: true,
       };
       const resumeThreadId = readResumeThreadId(input);
       this.emitLifecycleEvent(
@@ -2366,6 +2379,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
+    if (request.method === "item/tool/call") {
+      void this.handleDynamicToolCallRequest(context, request);
+      return;
+    }
+
     this.writeMessage(context, {
       id: request.id,
       error: {
@@ -2373,6 +2391,71 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         message: `Unsupported server request: ${request.method}`,
       },
     });
+  }
+
+  private async handleDynamicToolCallRequest(
+    context: CodexSessionContext,
+    request: JsonRpcRequest,
+  ): Promise<void> {
+    const params = this.readObject(request.params);
+    const namespace = this.readString(params, "namespace");
+    const tool = this.readString(params, "tool");
+    const args = this.readObject(params, "arguments") ?? {};
+
+    if (namespace !== DPCODE_BROWSER_USE_DYNAMIC_TOOL_NAMESPACE || !tool) {
+      this.writeMessage(context, {
+        id: request.id,
+        error: {
+          code: -32601,
+          message: `Unsupported dynamic tool: ${namespace ?? "<none>"}.${tool ?? "<missing>"}`,
+        },
+      });
+      return;
+    }
+
+    try {
+      const result = await callBrowserUseTool(tool, {
+        ...args,
+        sessionId: `codex:${context.session.threadId}`,
+      });
+      const contentItems = isBrowserUseScreenshotResult(result)
+        ? [
+            {
+              type: "inputText",
+              text: `Captured ${result.name} (${result.sizeBytes} bytes).`,
+            },
+            {
+              type: "inputImage",
+              imageUrl: browserUseScreenshotDataUrl(result),
+            },
+          ]
+        : [
+            {
+              type: "inputText",
+              text: typeof result === "string" ? result : JSON.stringify(result ?? {}, null, 2),
+            },
+          ];
+      this.writeMessage(context, {
+        id: request.id,
+        result: {
+          contentItems,
+          success: true,
+        },
+      });
+    } catch (error) {
+      this.writeMessage(context, {
+        id: request.id,
+        result: {
+          contentItems: [
+            {
+              type: "inputText",
+              text: error instanceof Error ? error.message : String(error),
+            },
+          ],
+          success: false,
+        },
+      });
+    }
   }
 
   private handleResponse(context: CodexSessionContext, response: JsonRpcResponse): void {

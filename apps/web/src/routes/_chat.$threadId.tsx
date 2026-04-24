@@ -771,6 +771,22 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
     };
   }, [activeSplitView, togglePanePanel]);
 
+  useEffect(() => {
+    const onOpenBrowserPanelRequest =
+      window.desktopBridge?.browser.onBrowserUseOpenPanelRequest;
+    if (typeof onOpenBrowserPanelRequest !== "function" || !activeSplitView) {
+      return;
+    }
+
+    const unsubscribe = onOpenBrowserPanelRequest(() => {
+      updatePanePanelState(activeSplitView.focusedPane, { panel: "browser" });
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [activeSplitView, updatePanePanelState]);
+
   const closePanePanel = useCallback(
     (pane: SplitViewPane) => {
       updatePanePanelState(pane, {
@@ -1134,6 +1150,22 @@ function SingleChatSurface(props: {
       unsubscribe?.();
     };
   }, [panelState, updatePanelState]);
+
+  useEffect(() => {
+    const onOpenBrowserPanelRequest =
+      window.desktopBridge?.browser.onBrowserUseOpenPanelRequest;
+    if (typeof onOpenBrowserPanelRequest !== "function") {
+      return;
+    }
+
+    const unsubscribe = onOpenBrowserPanelRequest(() => {
+      updatePanelState({ panel: "browser" });
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [updatePanelState]);
 
   const shouldRenderPanelContent = activePanel !== null && (panelOpen || panelState.hasOpenedPanel);
 

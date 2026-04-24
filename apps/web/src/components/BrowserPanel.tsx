@@ -58,6 +58,8 @@ interface BrowserPanelProps {
 
 const BROWSER_BOUNDS_SYNC_BURST_FRAMES = 8;
 const BROWSER_BOUNDS_SYNC_STABLE_FRAME_TARGET = 2;
+const BROWSER_WEBVIEW_PARTITION = "persist:dpcode-browser";
+const BROWSER_BLANK_URL = "about:blank";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DPCODE_BROWSER_LABEL = "DPCODE browser";
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -91,6 +93,11 @@ interface BrowserViewportPerfCounters {
   burstFrames: number;
   transitionSignals: number;
   ignoredTransitionSignals: number;
+}
+
+interface BrowserWebviewElement extends HTMLElement {
+  getWebContentsId?: () => number;
+  loadURL?: (url: string) => Promise<void>;
 }
 
 const VIEWPORT_TRANSITION_PROPERTIES = new Set([
@@ -295,6 +302,9 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
   );
   const addressInputRef = useRef<HTMLInputElement>(null);
   const browserViewportRef = useRef<HTMLDivElement>(null);
+  const browserWebviewRef = useRef<BrowserWebviewElement | null>(null);
+  const browserWebviewTabIdRef = useRef<string | null>(null);
+  const browserWebviewAttachKeyRef = useRef<string | null>(null);
   const copyScreenshotButtonRef = useRef<HTMLButtonElement>(null);
   const addressDraftsByTabIdRef = useRef(new Map<string, string>());
   const lastSyncedAddressByTabIdRef = useRef(new Map<string, string>());
@@ -419,6 +429,82 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
 
     previousActiveTabIdRef.current = activeTabId;
   }, [activeTab]);
+
+  useLayoutEffect(() => {
+    if (!api || !workspaceReady || !activeTab) {
+      return;
+    }
+
+    const host = browserViewportRef.current;
+    if (!host) {
+      return;
+    }
+
+    let webview = browserWebviewRef.current;
+    if (!webview) {
+      webview = document.createElement("webview") as BrowserWebviewElement;
+      webview.className = "h-full w-full";
+      webview.style.display = "flex";
+      webview.style.width = "100%";
+      webview.style.height = "100%";
+      webview.style.backgroundColor = "#fff";
+      webview.setAttribute("partition", BROWSER_WEBVIEW_PARTITION);
+      webview.setAttribute("webpreferences", "contextIsolation=yes,nodeIntegration=no,sandbox=yes");
+      browserWebviewRef.current = webview;
+      host.append(webview);
+    } else if (webview.parentElement !== host) {
+      host.append(webview);
+    }
+
+    const initialUrl = activeTab.lastCommittedUrl ?? activeTab.url ?? BROWSER_BLANK_URL;
+    if (browserWebviewTabIdRef.current !== activeTab.id) {
+      browserWebviewTabIdRef.current = activeTab.id;
+      browserWebviewAttachKeyRef.current = null;
+      webview.setAttribute("src", initialUrl.length > 0 ? initialUrl : BROWSER_BLANK_URL);
+    }
+
+    const attachVisibleWebview = () => {
+      const webContentsId = webview.getWebContentsId?.();
+      if (!webContentsId || webContentsId <= 0) {
+        return;
+      }
+
+      const attachKey = `${activeTab.id}:${webContentsId}`;
+      if (browserWebviewAttachKeyRef.current === attachKey) {
+        return;
+      }
+      browserWebviewAttachKeyRef.current = attachKey;
+      void runBrowserAction(() =>
+        api.browser.attachWebview({
+          threadId,
+          tabId: activeTab.id,
+          webContentsId,
+        }),
+      ).then((state) => {
+        if (state) {
+          upsertThreadState(state);
+        }
+      });
+    };
+
+    webview.addEventListener("dom-ready", attachVisibleWebview);
+    webview.addEventListener("did-start-loading", attachVisibleWebview);
+    window.requestAnimationFrame(attachVisibleWebview);
+
+    return () => {
+      webview.removeEventListener("dom-ready", attachVisibleWebview);
+      webview.removeEventListener("did-start-loading", attachVisibleWebview);
+    };
+  }, [activeTab, api, runBrowserAction, threadId, upsertThreadState, workspaceReady]);
+
+  useEffect(() => {
+    return () => {
+      browserWebviewRef.current?.remove();
+      browserWebviewRef.current = null;
+      browserWebviewTabIdRef.current = null;
+      browserWebviewAttachKeyRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     const liveTabIds = new Set(threadBrowserState?.tabs.map((tab) => tab.id) ?? []);
@@ -1060,13 +1146,13 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
             </div>
           ) : null}
         </div>
-        <div className="relative min-h-0 flex-1 bg-background">
+        <div className="relative min-h-0 flex-1 bg-transparent">
           {!workspaceReady ? (
             <div className="absolute inset-0 z-10">
               <DiffPanelLoadingState label="Starting browser..." />
             </div>
           ) : null}
-          <div ref={browserViewportRef} className="absolute inset-0" />
+          <div ref={browserViewportRef} className="absolute inset-0 bg-transparent" />
         </div>
       </div>
     </DiffPanelShell>

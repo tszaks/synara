@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Option, Schema } from "effect";
-import { TrimmedNonEmptyString, ProviderKind, type ProviderStartOptions } from "@t3tools/contracts";
+import {
+  TrimmedNonEmptyString,
+  ProviderKind,
+  type BrowserUseApprovalMode,
+  type ProviderStartOptions,
+} from "@t3tools/contracts";
 import {
   getDefaultModel,
   getModelOptions,
@@ -17,6 +22,8 @@ export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const MIN_CHAT_FONT_SIZE_PX = 11;
 export const MAX_CHAT_FONT_SIZE_PX = 18;
 export const DEFAULT_CHAT_FONT_SIZE_PX = 12;
+export const BrowserUseApprovalModeSchema = Schema.Literals(["always-ask", "allowed-domains"]);
+export const DEFAULT_BROWSER_USE_APPROVAL_MODE: BrowserUseApprovalMode = "always-ask";
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -98,6 +105,11 @@ export const AppSettingsSchema = Schema.Struct({
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  browserUseApprovalMode: BrowserUseApprovalModeSchema.pipe(
+    withDefaults(() => DEFAULT_BROWSER_USE_APPROVAL_MODE),
+  ),
+  browserUseBlockedDomains: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  browserUseAllowedDomains: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
@@ -196,7 +208,37 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
+    browserUseBlockedDomains: normalizeBrowserUseDomains(settings.browserUseBlockedDomains),
+    browserUseAllowedDomains: normalizeBrowserUseDomains(settings.browserUseAllowedDomains),
   };
+}
+
+export function normalizeBrowserUseDomains(domains: readonly string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const domain of domains) {
+    const value = normalizeBrowserUseDomain(domain);
+    if (!value || value.length > 253 || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    normalized.push(value);
+  }
+  return normalized;
+}
+
+function normalizeBrowserUseDomain(domain: string): string {
+  const trimmed = domain.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`);
+    return parsed.hostname.trim().toLowerCase().replace(/^\.+|\.+$/g, "");
+  } catch {
+    return trimmed.toLowerCase().replace(/^\.+|\.+$/g, "");
+  }
 }
 
 export function getCustomModelsForProvider(

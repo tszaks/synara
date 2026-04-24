@@ -5,8 +5,18 @@
 
 import * as Crypto from "node:crypto";
 
-import { BrowserWindow, clipboard, nativeImage, shell, WebContentsView } from "electron";
+import {
+  BrowserWindow,
+  clipboard,
+  nativeImage,
+  session,
+  shell,
+  webContents as electronWebContents,
+  WebContentsView,
+} from "electron";
+import type { WebContents } from "electron";
 import type {
+  BrowserAttachWebviewInput,
   BrowserCaptureScreenshotResult,
   BrowserExecuteCdpInput,
   BrowserNavigateInput,
@@ -36,7 +46,9 @@ interface LiveTabRuntime {
   key: string;
   threadId: ThreadId;
   tabId: string;
-  view: WebContentsView;
+  webContents: WebContents;
+  view: WebContentsView | null;
+  ownsWebContents: boolean;
 }
 
 interface NativeBrowserViewVisibility {
@@ -78,6 +90,11 @@ export interface BrowserUseSnapshot {
 export interface BrowserUseCdpEvent {
   method: string;
   params?: unknown;
+}
+
+export interface BrowserUseMoveMouseInput extends BrowserTabInput {
+  x: number;
+  y: number;
 }
 
 function createBrowserTab(url = ABOUT_BLANK_URL): BrowserTabState {
@@ -343,17 +360,36 @@ export class DesktopBrowserManager {
   }
 
   getBrowserUseSnapshot(): BrowserUseSnapshot | null {
-    if (!this.activeThreadId || !this.getVisibleBoundsForThread(this.activeThreadId)) {
-      return null;
+    if (this.activeThreadId) {
+      const activeState = this.states.get(this.activeThreadId);
+      if (activeState?.open) {
+        return {
+          threadId: this.activeThreadId,
+          state: this.snapshotThreadState(this.activeThreadId, activeState),
+        };
+      }
     }
-    const state = this.states.get(this.activeThreadId);
-    if (!state) {
-      return null;
+
+    if (this.activeBoundsThreadId) {
+      const boundedState = this.states.get(this.activeBoundsThreadId);
+      if (boundedState?.open) {
+        return {
+          threadId: this.activeBoundsThreadId,
+          state: this.snapshotThreadState(this.activeBoundsThreadId, boundedState),
+        };
+      }
     }
-    return {
-      threadId: this.activeThreadId,
-      state: this.snapshotThreadState(this.activeThreadId, state),
-    };
+
+    for (const [threadId, state] of this.states) {
+      if (state.open) {
+        return {
+          threadId,
+          state: this.snapshotThreadState(threadId, state),
+        };
+      }
+    }
+
+    return null;
   }
 
   open(input: BrowserOpenInput): ThreadBrowserState {
@@ -444,6 +480,10 @@ export class DesktopBrowserManager {
       this.attachedBoundsSignature === nextBoundsSignature
     ) {
       this.perfCounters.setPanelBoundsNoopSkips += 1;
+      const runtime = activeRuntimeKey ? this.runtimes.get(activeRuntimeKey) : null;
+      if (runtime) {
+        this.attachRuntime(runtime, nextBounds);
+      }
       return;
     }
 
@@ -461,6 +501,46 @@ export class DesktopBrowserManager {
     }
 
     this.activateThread(input.threadId, nextBounds);
+  }
+
+  // Adopts the renderer-owned Electron <webview> so the user-visible page and
+  // browser automation tools operate on the same WebContents, matching Codex's IAB shape.
+  attachWebview(input: BrowserAttachWebviewInput): ThreadBrowserState {
+    const state = this.ensureWorkspace(input.threadId);
+    const tab = this.resolveTab(state, input.tabId);
+    const webContents = electronWebContents.fromId(input.webContentsId);
+    if (!webContents || webContents.isDestroyed()) {
+      throw new Error("The visible browser webview is not available.");
+    }
+
+    const key = buildRuntimeKey(input.threadId, tab.id);
+    const existing = this.runtimes.get(key);
+    if (existing?.webContents.id !== webContents.id) {
+      if (existing) {
+        this.destroyRuntime(input.threadId, tab.id);
+      }
+      const runtime: LiveTabRuntime = {
+        key,
+        threadId: input.threadId,
+        tabId: tab.id,
+        webContents,
+        view: null,
+        ownsWebContents: false,
+      };
+      this.configureRuntimeWebContents(runtime);
+      this.runtimes.set(key, runtime);
+    }
+
+    const didChange = tab.status !== "live" || tab.lastError !== null;
+    tab.status = "live";
+    tab.lastError = null;
+    syncThreadLastError(state);
+    if (didChange) {
+      this.markThreadStateChanged(input.threadId);
+    }
+    this.queueRuntimeStateSync(input.threadId, tab.id);
+    this.emitState(input.threadId);
+    return this.snapshotThreadState(input.threadId, state);
   }
 
   navigate(input: BrowserNavigateInput): ThreadBrowserState {
@@ -495,7 +575,7 @@ export class DesktopBrowserManager {
     const tab = this.resolveTab(state, input.tabId);
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, tab.id));
     if (runtime) {
-      runtime.view.webContents.reload();
+      runtime.webContents.reload();
     } else if (this.activeThreadId === input.threadId) {
       this.resumeThread(input.threadId);
       void this.loadTab(input.threadId, tab.id, { force: true });
@@ -505,16 +585,16 @@ export class DesktopBrowserManager {
 
   goBack(input: BrowserTabInput): ThreadBrowserState {
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
-    if (runtime && runtime.view.webContents.canGoBack()) {
-      runtime.view.webContents.goBack();
+    if (runtime && runtime.webContents.canGoBack()) {
+      runtime.webContents.goBack();
     }
     return this.getState({ threadId: input.threadId });
   }
 
   goForward(input: BrowserTabInput): ThreadBrowserState {
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
-    if (runtime && runtime.view.webContents.canGoForward()) {
-      runtime.view.webContents.goForward();
+    if (runtime && runtime.webContents.canGoForward()) {
+      runtime.webContents.goForward();
     }
     return this.getState({ threadId: input.threadId });
   }
@@ -621,7 +701,7 @@ export class DesktopBrowserManager {
     if (bounds) {
       this.attachActiveTab(input.threadId, bounds);
     }
-    runtime.view.webContents.openDevTools({ mode: "detach" });
+    runtime.webContents.openDevTools({ mode: "detach" });
   }
 
   // Ensures the requested tab is active/live, then returns a fresh PNG capture
@@ -641,7 +721,7 @@ export class DesktopBrowserManager {
 
     this.resumeThread(input.threadId);
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
-    const webContents = runtime.view.webContents;
+    const webContents = runtime.webContents;
     const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
     const currentUrl = webContents.getURL();
     const bounds = this.getVisibleBoundsForThread(input.threadId);
@@ -690,6 +770,13 @@ export class DesktopBrowserManager {
     clipboard.writeImage(image);
   }
 
+  // Clears agent/user browsing cookies from the persistent in-app browser partition.
+  async clearCookies(): Promise<void> {
+    await session.fromPartition(BROWSER_SESSION_PARTITION).clearStorageData({
+      storages: ["cookies"],
+    });
+  }
+
   // Runs a Chrome DevTools Protocol command against the requested tab so higher-level
   // browser automation can reuse the native browser runtime instead of scripting React.
   async executeCdp(input: BrowserExecuteCdpInput): Promise<unknown> {
@@ -704,7 +791,7 @@ export class DesktopBrowserManager {
 
     this.resumeThread(input.threadId);
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
-    const webContents = runtime.view.webContents;
+    const webContents = runtime.webContents;
     const bounds = this.getVisibleBoundsForThread(input.threadId);
     if (bounds) {
       this.attachActiveTab(input.threadId, bounds);
@@ -730,6 +817,39 @@ export class DesktopBrowserManager {
     }
   }
 
+  // Sends a native mouse-move event into the tab viewport for browser-use cursor feedback.
+  async moveBrowserUseMouse(input: BrowserUseMoveMouseInput): Promise<void> {
+    const state = this.ensureWorkspace(input.threadId);
+    const tab = this.resolveTab(state, input.tabId);
+    if (state.activeTabId !== tab.id) {
+      state.activeTabId = tab.id;
+      syncThreadLastError(state);
+      this.markThreadStateChanged(input.threadId);
+      this.emitState(input.threadId);
+    }
+
+    this.resumeThread(input.threadId);
+    const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
+    const bounds = this.getVisibleBoundsForThread(input.threadId);
+    if (bounds) {
+      this.attachActiveTab(input.threadId, bounds);
+    }
+
+    if (tab.status === "suspended") {
+      await this.loadTab(input.threadId, tab.id, { force: true, runtime });
+    } else {
+      this.queueRuntimeStateSync(input.threadId, tab.id);
+    }
+
+    runtime.webContents.sendInputEvent({
+      type: "mouseMove",
+      x: Math.max(0, Math.round(input.x)),
+      y: Math.max(0, Math.round(input.y)),
+      movementX: 0,
+      movementY: 0,
+    });
+  }
+
   async attachBrowserUseTab(input: BrowserTabInput): Promise<void> {
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
@@ -752,8 +872,8 @@ export class DesktopBrowserManager {
       this.queueRuntimeStateSync(input.threadId, tab.id);
     }
 
-    if (!runtime.view.webContents.debugger.isAttached()) {
-      runtime.view.webContents.debugger.attach("1.3");
+    if (!runtime.webContents.debugger.isAttached()) {
+      runtime.webContents.debugger.attach("1.3");
     }
   }
 
@@ -773,9 +893,9 @@ export class DesktopBrowserManager {
       });
     };
 
-    runtime.view.webContents.debugger.on("message", handleMessage);
+    runtime.webContents.debugger.on("message", handleMessage);
     return () => {
-      runtime.view.webContents.debugger.removeListener("message", handleMessage);
+      runtime.webContents.debugger.removeListener("message", handleMessage);
     };
   }
 
@@ -832,7 +952,7 @@ export class DesktopBrowserManager {
       if (tab.status === "suspended") {
         void this.loadTab(threadId, tab.id, { force: true, runtime });
       } else {
-        didChange = syncTabStateFromRuntime(state, tab, runtime.view.webContents) || didChange;
+        didChange = syncTabStateFromRuntime(state, tab, runtime.webContents) || didChange;
       }
     }
 
@@ -999,11 +1119,23 @@ export class DesktopBrowserManager {
 
     const nextBoundsSignature = browserBoundsSignature(bounds);
     this.runtimeLastActiveAtByKey.set(runtime.key, Date.now());
-    if (this.attachedRuntimeKey === runtime.key) {
-      if (this.attachedBoundsSignature === nextBoundsSignature) {
-        return;
+    // The visible browser surface is the renderer-owned <webview>; owned
+    // WebContentsViews stay hidden so they cannot cover it with a stale layer.
+    if (runtime.ownsWebContents) {
+      if (this.attachedRuntimeKey === runtime.key) {
+        this.detachAttachedRuntime();
       }
+      this.attachedBoundsSignature = nextBoundsSignature;
+      return;
+    }
+    if (!runtime.view) {
+      this.attachedRuntimeKey = runtime.key;
+      this.attachedBoundsSignature = nextBoundsSignature;
+      return;
+    }
+    if (this.attachedRuntimeKey === runtime.key) {
       this.setRuntimeViewHidden(runtime, false);
+      this.bringRuntimeViewToFront(runtime);
       runtime.view.setBounds(bounds);
       this.attachedBoundsSignature = nextBoundsSignature;
       return;
@@ -1011,10 +1143,25 @@ export class DesktopBrowserManager {
 
     this.detachAttachedRuntime();
     this.setRuntimeViewHidden(runtime, false);
-    window.contentView.addChildView(runtime.view);
+    this.bringRuntimeViewToFront(runtime);
     runtime.view.setBounds(bounds);
     this.attachedRuntimeKey = runtime.key;
     this.attachedBoundsSignature = nextBoundsSignature;
+  }
+
+  private bringRuntimeViewToFront(runtime: LiveTabRuntime): void {
+    const window = this.window;
+    if (!window || !runtime.view) {
+      return;
+    }
+
+    try {
+      window.contentView.removeChildView(runtime.view);
+    } catch {
+      // Electron throws if the view is not currently attached; adding it below
+      // is the desired state either way.
+    }
+    window.contentView.addChildView(runtime.view);
   }
 
   private detachAttachedRuntime(): void {
@@ -1025,15 +1172,23 @@ export class DesktopBrowserManager {
     }
 
     const runtime = this.runtimes.get(this.attachedRuntimeKey);
-    if (runtime) {
+    if (runtime?.view) {
       this.setRuntimeViewHidden(runtime, true);
-      this.window.contentView.removeChildView(runtime.view);
+      try {
+        this.window.contentView.removeChildView(runtime.view);
+      } catch {
+        // The browser surface may already have been detached by a window/view
+        // lifecycle event. State cleanup below is still required.
+      }
     }
     this.attachedRuntimeKey = null;
     this.attachedBoundsSignature = null;
   }
 
   private setRuntimeViewHidden(runtime: LiveTabRuntime, hidden: boolean): void {
+    if (!runtime.view) {
+      return;
+    }
     const nativeView = runtime.view as typeof runtime.view & NativeBrowserViewVisibility;
     nativeView.setVisible?.(!hidden);
     if (hidden) {
@@ -1046,7 +1201,11 @@ export class DesktopBrowserManager {
     this.clearTabSuspendTimer(threadId, tabId);
     const existing = this.runtimes.get(key);
     if (existing) {
-      return existing;
+      if (existing.webContents.isDestroyed()) {
+        this.destroyRuntime(threadId, tabId);
+      } else {
+        return existing;
+      }
     }
 
     const runtime = this.createLiveRuntime(threadId, tabId);
@@ -1078,9 +1237,16 @@ export class DesktopBrowserManager {
       key: buildRuntimeKey(threadId, tabId),
       threadId,
       tabId,
+      webContents: view.webContents,
       view,
+      ownsWebContents: true,
     };
-    const webContents = view.webContents;
+    this.configureRuntimeWebContents(runtime);
+    return runtime;
+  }
+
+  private configureRuntimeWebContents(runtime: LiveTabRuntime): void {
+    const { threadId, tabId, webContents } = runtime;
 
     webContents.setWindowOpenHandler(({ url }) => {
       if (url.startsWith("http://") || url.startsWith("https://") || url === ABOUT_BLANK_URL) {
@@ -1158,8 +1324,6 @@ export class DesktopBrowserManager {
         this.attachActiveTab(threadId, bounds);
       }
     });
-
-    return runtime;
   }
 
   private async loadTab(
@@ -1174,7 +1338,7 @@ export class DesktopBrowserManager {
     }
 
     const runtime = options.runtime ?? this.ensureLiveRuntime(threadId, tabId);
-    const webContents = runtime.view.webContents;
+    const webContents = runtime.webContents;
     const nextUrl = normalizeUrlInput(
       options.force === true ? tab.url : (tab.lastCommittedUrl ?? tab.url),
     );
@@ -1220,7 +1384,7 @@ export class DesktopBrowserManager {
       return;
     }
 
-    const didChange = syncTabStateFromRuntime(state, tab, runtime.view.webContents, faviconUrls);
+    const didChange = syncTabStateFromRuntime(state, tab, runtime.webContents, faviconUrls);
     const nextDidChange = syncThreadLastError(state) || didChange;
     if (nextDidChange) {
       this.markThreadStateChanged(threadId);
@@ -1293,7 +1457,7 @@ export class DesktopBrowserManager {
     }
 
     this.runtimes.delete(key);
-    const webContents = runtime.view.webContents;
+    const webContents = runtime.webContents;
     if (!webContents.isDestroyed()) {
       if (webContents.debugger.isAttached()) {
         try {
@@ -1302,7 +1466,9 @@ export class DesktopBrowserManager {
           // The runtime is being torn down anyway; ignore stale-debugger cleanup noise.
         }
       }
-      webContents.close({ waitForBeforeUnload: false });
+      if (runtime.ownsWebContents) {
+        webContents.close({ waitForBeforeUnload: false });
+      }
     }
   }
 
@@ -1349,7 +1515,7 @@ export class DesktopBrowserManager {
   private getTrackedProcessIds(): number[] {
     const processIds = new Set<number>();
     for (const runtime of this.runtimes.values()) {
-      const webContents = runtime.view.webContents;
+      const webContents = runtime.webContents;
       if (webContents.isDestroyed()) {
         continue;
       }
@@ -1471,7 +1637,7 @@ function suspendTabState(tab: BrowserTabState): boolean {
 function syncTabStateFromRuntime(
   state: ThreadBrowserState,
   tab: BrowserTabState,
-  webContents: WebContentsView["webContents"],
+  webContents: WebContents,
   faviconUrls?: string[],
 ): boolean {
   const currentUrl = webContents.getURL();

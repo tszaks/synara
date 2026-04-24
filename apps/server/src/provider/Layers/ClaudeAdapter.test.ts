@@ -317,8 +317,13 @@ describe("ClaudeAdapterLive", () => {
           "Do not present the host app as Claude Code unless the user is explicitly asking about Claude Code.",
           "Treat the current working directory as the active workspace for the task.",
           "When the user asks about the current project, codebase, or repository, proactively inspect files in the current working directory before asking the user where to look.",
+          "DP Code exposes the in-app browser through the dpcode-browser MCP tools.",
+          "Use these tools when the user asks you to inspect, navigate, test, screenshot, or interact with browser content.",
+          "Prefer browser_navigate for opening pages, browser_list_tabs/browser_create_tab for tab control, and browser_execute_cdp only when a lower-level Chrome DevTools Protocol command is needed.",
+          "Use browser_capture_screenshot when the user asks what the page looks like or when pixel-level visual layout matters.",
         ].join("\n"),
       });
+      assert.equal(createInput?.options.mcpServers?.["dpcode-browser"]?.type, "stdio");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

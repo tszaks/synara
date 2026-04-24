@@ -85,6 +85,21 @@ function ChatRouteGlobalShortcuts() {
   const latestUsableProjectId = resolveLatestProjectTargetId(projects, latestProjectId);
 
   useEffect(() => {
+    if (!window.desktopBridge) {
+      return;
+    }
+    void window.desktopBridge.browser.updateBrowserUsePolicy({
+      approvalMode: appSettings.browserUseApprovalMode,
+      blockedDomains: appSettings.browserUseBlockedDomains,
+      allowedDomains: appSettings.browserUseAllowedDomains,
+    });
+  }, [
+    appSettings.browserUseAllowedDomains,
+    appSettings.browserUseApprovalMode,
+    appSettings.browserUseBlockedDomains,
+  ]);
+
+  useEffect(() => {
     if (!currentProjectId) {
       return;
     }
