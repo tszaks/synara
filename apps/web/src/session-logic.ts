@@ -41,6 +41,7 @@ export const PROVIDER_OPTIONS: Array<{
   { value: "cursor", label: "Cursor", available: true },
   { value: "gemini", label: "Gemini", available: true },
   { value: "opencode", label: "OpenCode", available: true },
+  { value: "pi", label: "Pi", available: true },
 ];
 
 export interface WorkLogEntry {

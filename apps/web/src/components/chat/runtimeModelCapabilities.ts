@@ -91,7 +91,10 @@ export function getRuntimeAwareModelCapabilities(input: {
     })) ?? staticCapabilities.contextWindowOptions;
   const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
   if (
-    (input.provider !== "codex" && input.provider !== "cursor" && input.provider !== "opencode") ||
+    (input.provider !== "codex" &&
+      input.provider !== "cursor" &&
+      input.provider !== "opencode" &&
+      input.provider !== "pi") ||
     !runtimeEfforts ||
     runtimeEfforts.length === 0
   ) {

@@ -26,7 +26,7 @@ import {
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
-import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon } from "../components/Icons";
+import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon, PiIcon } from "../components/Icons";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
@@ -343,6 +343,7 @@ function SettingsRouteView() {
     opencode: Boolean(
       settings.openCodeBinaryPath || settings.openCodeServerUrl || settings.openCodeServerPassword,
     ),
+    pi: Boolean(settings.piBinaryPath || settings.piAgentDir),
   });
   const [selectedCustomModelProvider, setSelectedCustomModelProvider] =
     useState<ProviderKind>("codex");
@@ -354,6 +355,7 @@ function SettingsRouteView() {
     cursor: "",
     gemini: "",
     opencode: "",
+    pi: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
@@ -430,7 +432,8 @@ function SettingsRouteView() {
     settings.customClaudeModels.length +
     settings.customCursorModels.length +
     settings.customGeminiModels.length +
-    settings.customOpenCodeModels.length;
+    settings.customOpenCodeModels.length +
+    settings.customPiModels.length;
   const savedCustomModelRows = MODEL_PROVIDER_SETTINGS.flatMap((providerSettings) =>
     getCustomModelsForProvider(settings, providerSettings.provider).map((slug) => ({
       key: `${providerSettings.provider}:${slug}`,
@@ -615,6 +618,7 @@ function SettingsRouteView() {
       cursor: false,
       gemini: false,
       opencode: false,
+      pi: false,
     });
     setSelectedCustomModelProvider("codex");
     setCustomModelInputByProvider({
@@ -623,6 +627,7 @@ function SettingsRouteView() {
       cursor: "",
       gemini: "",
       opencode: "",
+      pi: "",
     });
     setCustomModelErrorByProvider({});
     setShowAllCustomModels(false);
@@ -921,7 +926,8 @@ function SettingsRouteView() {
                     value !== "claudeAgent" &&
                     value !== "cursor" &&
                     value !== "gemini" &&
-                    value !== "opencode"
+                    value !== "opencode" &&
+                    value !== "pi"
                   ) {
                     return;
                   }
@@ -939,6 +945,8 @@ function SettingsRouteView() {
                         <Gemini className="size-3.5 text-foreground" />
                       ) : settings.defaultProvider === "opencode" ? (
                         <OpenCodeIcon className="size-3.5 text-muted-foreground/70" />
+                      ) : settings.defaultProvider === "pi" ? (
+                        <PiIcon className="size-3.5 text-foreground" />
                       ) : (
                         <OpenAI className="size-3.5" />
                       )}
@@ -975,6 +983,12 @@ function SettingsRouteView() {
                     <span className="flex items-center gap-2">
                       <OpenCodeIcon className="size-3.5 text-muted-foreground/70" />
                       OpenCode
+                    </span>
+                  </SelectItem>
+                  <SelectItem hideIndicator value="pi">
+                    <span className="flex items-center gap-2">
+                      <PiIcon className="size-3.5 text-foreground" />
+                      Pi
                     </span>
                   </SelectItem>
                 </SelectPopup>
@@ -1856,6 +1870,7 @@ function SettingsRouteView() {
                       customCursorModels: defaults.customCursorModels,
                       customGeminiModels: defaults.customGeminiModels,
                       customOpenCodeModels: defaults.customOpenCodeModels,
+                      customPiModels: defaults.customPiModels,
                     });
                     setCustomModelErrorByProvider({});
                     setShowAllCustomModels(false);
@@ -1874,7 +1889,8 @@ function SettingsRouteView() {
                       value !== "claudeAgent" &&
                       value !== "cursor" &&
                       value !== "gemini" &&
-                      value !== "opencode"
+                      value !== "opencode" &&
+                      value !== "pi"
                     ) {
                       return;
                     }
@@ -2005,6 +2021,8 @@ function SettingsRouteView() {
                       openCodeBinaryPath: defaults.openCodeBinaryPath,
                       openCodeServerUrl: defaults.openCodeServerUrl,
                       openCodeServerPassword: defaults.openCodeServerPassword,
+                      piAgentDir: defaults.piAgentDir,
+                      piBinaryPath: defaults.piBinaryPath,
                     });
                     setOpenInstallProviders({
                       codex: false,
@@ -2012,6 +2030,7 @@ function SettingsRouteView() {
                       cursor: false,
                       gemini: false,
                       opencode: false,
+                      pi: false,
                     });
                   }}
                 />

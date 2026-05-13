@@ -126,7 +126,7 @@ function resetComposerDraftStore() {
 }
 
 function modelSelection(
-  provider: "codex" | "claudeAgent" | "opencode",
+  provider: ModelSelection["provider"],
   model: string,
   options?: ModelSelection["options"],
 ): ModelSelection {
@@ -1111,7 +1111,14 @@ describe("composerDraftStore modelSelection", () => {
       selectedProvider: "opencode",
       threadModelSelection: modelSelection("opencode", "opencode/gpt-5-nano"),
       projectModelSelection: null,
-      customModelsByProvider: { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+      customModelsByProvider: {
+        codex: [],
+        claudeAgent: [],
+        cursor: [],
+        gemini: [],
+        opencode: [],
+        pi: [],
+      },
       availableModelOptionsByProvider: {
         opencode: [{ slug: "opencode/gpt-5-nano", name: "GPT-5 Nano" }],
       },
@@ -1129,7 +1136,14 @@ describe("composerDraftStore modelSelection", () => {
       selectedProvider: "opencode",
       threadModelSelection: modelSelection("opencode", "openai/gpt-5.4"),
       projectModelSelection: null,
-      customModelsByProvider: { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+      customModelsByProvider: {
+        codex: [],
+        claudeAgent: [],
+        cursor: [],
+        gemini: [],
+        opencode: [],
+        pi: [],
+      },
       availableModelOptionsByProvider: {
         opencode: [
           { slug: "openai/gpt-5-codex", name: "GPT-5-Codex" },
@@ -1152,7 +1166,14 @@ describe("composerDraftStore modelSelection", () => {
       selectedProvider: "opencode",
       threadModelSelection: null,
       projectModelSelection: null,
-      customModelsByProvider: { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+      customModelsByProvider: {
+        codex: [],
+        claudeAgent: [],
+        cursor: [],
+        gemini: [],
+        opencode: [],
+        pi: [],
+      },
       availableModelOptionsByProvider: {
         opencode: [
           { slug: "opencode/gpt-5-nano", name: "GPT-5 Nano" },
@@ -1162,6 +1183,36 @@ describe("composerDraftStore modelSelection", () => {
     });
 
     expect(state.selectedModel).toBe("opencode/gpt-5-nano");
+  });
+
+  it("preserves a selected Pi custom model when discovery omits it", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: {
+        modelSelectionByProvider: {
+          pi: modelSelection("pi", "openai/gpt-5.5"),
+        },
+        activeProvider: "pi",
+      },
+      selectedProvider: "pi",
+      threadModelSelection: null,
+      projectModelSelection: null,
+      customModelsByProvider: {
+        codex: [],
+        claudeAgent: [],
+        cursor: [],
+        gemini: [],
+        opencode: [],
+        pi: [],
+      },
+      availableModelOptionsByProvider: {
+        pi: [
+          { slug: "openai/gpt-5.1", name: "GPT-5.1" },
+          { slug: "anthropic/claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+        ],
+      },
+    });
+
+    expect(state.selectedModel).toBe("openai/gpt-5.5");
   });
 
   it("updates only the draft when sticky persistence is disabled", () => {

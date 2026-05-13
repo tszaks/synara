@@ -12,6 +12,7 @@ const ProviderDiscoveryKind = Schema.Literals([
   "cursor",
   "gemini",
   "opencode",
+  "pi",
 ]);
 
 export const ProviderSkillInterface = Schema.Struct({
@@ -220,6 +221,7 @@ export const ProviderListModelsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   apiEndpoint: Schema.optional(TrimmedNonEmptyString),
+  agentDir: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListModelsInput = typeof ProviderListModelsInput.Type;
 

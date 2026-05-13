@@ -137,7 +137,14 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: ["galapagos-alpha"], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+        {
+          codex: ["galapagos-alpha"],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          opencode: [],
+          pi: [],
+        },
         "galapagos-alpha",
       ),
     ).toBe("galapagos-alpha");
@@ -147,7 +154,7 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+        { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [], pi: [] },
         "",
       ),
     ).toBe("gpt-5.5");
@@ -157,7 +164,7 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+        { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [], pi: [] },
         "GPT-5.3 Codex",
       ),
     ).toBe("gpt-5.3-codex");
@@ -167,7 +174,7 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "claudeAgent",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+        { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [], pi: [] },
         "sonnet",
       ),
     ).toBe("claude-sonnet-4-6");
@@ -177,7 +184,7 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+        { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [], pi: [] },
         "custom/selected-model",
       ),
     ).toBe("custom/selected-model");
@@ -263,6 +270,8 @@ describe("getProviderStartOptions", () => {
         openCodeBinaryPath: "",
         openCodeServerPassword: "",
         openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "",
       }),
     ).toEqual({
       claudeAgent: {
@@ -293,6 +302,8 @@ describe("getProviderStartOptions", () => {
         openCodeBinaryPath: "",
         openCodeServerPassword: "",
         openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "",
       }),
     ).toBeUndefined();
   });
@@ -305,6 +316,7 @@ describe("provider-indexed custom model settings", () => {
     customCursorModels: ["cursor/custom-model"],
     customGeminiModels: ["gemini/custom-flash"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
+    customPiModels: ["anthropic/custom-pi"],
   } as const;
 
   it("exports one provider config per provider", () => {
@@ -314,6 +326,7 @@ describe("provider-indexed custom model settings", () => {
       "cursor",
       "gemini",
       "opencode",
+      "pi",
     ]);
   });
 
@@ -323,6 +336,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
     expect(getCustomModelsForProvider(settings, "gemini")).toEqual(["gemini/custom-flash"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
+    expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
   });
 
   it("reads default custom models for each provider", () => {
@@ -332,6 +346,7 @@ describe("provider-indexed custom model settings", () => {
       customCursorModels: ["cursor/default-model"],
       customGeminiModels: ["gemini/default-flash"],
       customOpenCodeModels: ["openai/gpt-5"],
+      customPiModels: ["anthropic/default-pi"],
     } as const;
 
     expect(getDefaultCustomModelsForProvider(defaults, "codex")).toEqual(["default/codex-model"]);
@@ -341,6 +356,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getDefaultCustomModelsForProvider(defaults, "cursor")).toEqual(["cursor/default-model"]);
     expect(getDefaultCustomModelsForProvider(defaults, "gemini")).toEqual(["gemini/default-flash"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
   });
 
   it("patches custom models for codex", () => {
@@ -373,6 +389,12 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for pi", () => {
+    expect(patchCustomModels("pi", ["anthropic/custom-pi"])).toEqual({
+      customPiModels: ["anthropic/custom-pi"],
+    });
+  });
+
   it("builds a complete provider-indexed custom model record", () => {
     expect(getCustomModelsByProvider(settings)).toEqual({
       codex: ["custom/codex-model"],
@@ -380,6 +402,7 @@ describe("provider-indexed custom model settings", () => {
       cursor: ["cursor/custom-model"],
       gemini: ["gemini/custom-flash"],
       opencode: ["openrouter/gpt-oss-120b"],
+      pi: ["anthropic/custom-pi"],
     });
   });
 
@@ -401,6 +424,9 @@ describe("provider-indexed custom model settings", () => {
     expect(
       modelOptionsByProvider.opencode.some((option) => option.slug === "openrouter/gpt-oss-120b"),
     ).toBe(true);
+    expect(modelOptionsByProvider.pi.some((option) => option.slug === "anthropic/custom-pi")).toBe(
+      true,
+    );
   });
 
   it("normalizes and deduplicates custom model options per provider", () => {
@@ -413,6 +439,11 @@ describe("provider-indexed custom model settings", () => {
         " openai/gpt-5 ",
         "openrouter/gpt-oss-120b",
         "openrouter/gpt-oss-120b",
+      ],
+      customPiModels: [
+        " anthropic/claude-sonnet-4-5 ",
+        "anthropic/custom-pi",
+        "anthropic/custom-pi",
       ],
     });
 
@@ -437,6 +468,9 @@ describe("provider-indexed custom model settings", () => {
     );
     expect(
       modelOptionsByProvider.opencode.filter((option) => option.slug === "openrouter/gpt-oss-120b"),
+    ).toHaveLength(1);
+    expect(
+      modelOptionsByProvider.pi.filter((option) => option.slug === "anthropic/custom-pi"),
     ).toHaveLength(1);
   });
 });
@@ -470,6 +504,7 @@ describe("AppSettingsSchema", () => {
       customCursorModels: [],
       customGeminiModels: [],
       customOpenCodeModels: [],
+      customPiModels: [],
     });
   });
 });
