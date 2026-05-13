@@ -95,9 +95,11 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           ? (geminiModelOptionsFromEffortValue(nextOption.value) ?? {})
           : provider === "opencode"
             ? { variant: nextOption.value }
-            : provider === "codex"
-              ? { reasoningEffort: nextOption.value }
-              : { effort: nextOption.value };
+            : provider === "pi"
+              ? { thinkingLevel: nextOption.value }
+              : provider === "codex"
+                ? { reasoningEffort: nextOption.value }
+                : { effort: nextOption.value };
       setProviderModelOptions(
         threadId,
         provider,

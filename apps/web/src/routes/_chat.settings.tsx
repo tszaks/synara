@@ -26,7 +26,7 @@ import {
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
-import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon } from "../components/Icons";
+import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon, PiIcon } from "../components/Icons";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
@@ -121,7 +121,8 @@ type InstallBinarySettingsKey =
   | "codexBinaryPath"
   | "cursorBinaryPath"
   | "geminiBinaryPath"
-  | "openCodeBinaryPath";
+  | "openCodeBinaryPath"
+  | "piBinaryPath";
 type InstallProviderSettings = {
   provider: ProviderKind;
   title: string;
@@ -140,6 +141,9 @@ type InstallProviderSettings = {
   serverPasswordKey?: "openCodeServerPassword";
   serverPasswordPlaceholder?: string;
   serverPasswordDescription?: ReactNode;
+  agentDirKey?: "piAgentDir";
+  agentDirPlaceholder?: string;
+  agentDirDescription?: ReactNode;
 };
 
 const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
@@ -210,6 +214,21 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     serverPasswordKey: "openCodeServerPassword",
     serverPasswordPlaceholder: "OpenCode server password",
     serverPasswordDescription: "Optional password for an externally managed OpenCode server.",
+  },
+  {
+    provider: "pi",
+    title: "Pi",
+    binaryPathKey: "piBinaryPath",
+    binaryPlaceholder: "Pi binary path",
+    binaryDescription: (
+      <>
+        Leave blank to use <code>pi</code> from your PATH.
+      </>
+    ),
+    agentDirKey: "piAgentDir",
+    agentDirPlaceholder: "Pi agent directory",
+    agentDirDescription:
+      "Optional custom Pi agent directory for auth, models, skills, and commands.",
   },
 ];
 
@@ -343,6 +362,7 @@ function SettingsRouteView() {
     opencode: Boolean(
       settings.openCodeBinaryPath || settings.openCodeServerUrl || settings.openCodeServerPassword,
     ),
+    pi: Boolean(settings.piBinaryPath || settings.piAgentDir),
   });
   const [selectedCustomModelProvider, setSelectedCustomModelProvider] =
     useState<ProviderKind>("codex");
@@ -354,6 +374,7 @@ function SettingsRouteView() {
     cursor: "",
     gemini: "",
     opencode: "",
+    pi: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
@@ -375,6 +396,8 @@ function SettingsRouteView() {
   const openCodeBinaryPath = settings.openCodeBinaryPath;
   const openCodeServerUrl = settings.openCodeServerUrl;
   const openCodeServerPassword = settings.openCodeServerPassword;
+  const piBinaryPath = settings.piBinaryPath;
+  const piAgentDir = settings.piAgentDir;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
   const managedWorktrees = serverWorktreesQuery.data?.worktrees ?? [];
@@ -430,7 +453,8 @@ function SettingsRouteView() {
     settings.customClaudeModels.length +
     settings.customCursorModels.length +
     settings.customGeminiModels.length +
-    settings.customOpenCodeModels.length;
+    settings.customOpenCodeModels.length +
+    settings.customPiModels.length;
   const savedCustomModelRows = MODEL_PROVIDER_SETTINGS.flatMap((providerSettings) =>
     getCustomModelsForProvider(settings, providerSettings.provider).map((slug) => ({
       key: `${providerSettings.provider}:${slug}`,
@@ -451,7 +475,9 @@ function SettingsRouteView() {
     settings.codexHomePath !== defaults.codexHomePath ||
     settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
     settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-    settings.openCodeServerPassword !== defaults.openCodeServerPassword;
+    settings.openCodeServerPassword !== defaults.openCodeServerPassword ||
+    settings.piBinaryPath !== defaults.piBinaryPath ||
+    settings.piAgentDir !== defaults.piAgentDir;
 
   const changedSettingLabels = [
     ...(theme !== "system" ? ["Theme"] : []),
@@ -498,7 +524,8 @@ function SettingsRouteView() {
     settings.customClaudeModels.length > 0 ||
     settings.customCursorModels.length > 0 ||
     settings.customGeminiModels.length > 0 ||
-    settings.customOpenCodeModels.length > 0
+    settings.customOpenCodeModels.length > 0 ||
+    settings.customPiModels.length > 0
       ? ["Custom models"]
       : []),
     ...(isInstallSettingsDirty ? ["Provider installs"] : []),
@@ -615,6 +642,7 @@ function SettingsRouteView() {
       cursor: false,
       gemini: false,
       opencode: false,
+      pi: false,
     });
     setSelectedCustomModelProvider("codex");
     setCustomModelInputByProvider({
@@ -623,6 +651,7 @@ function SettingsRouteView() {
       cursor: "",
       gemini: "",
       opencode: "",
+      pi: "",
     });
     setCustomModelErrorByProvider({});
     setShowAllCustomModels(false);
@@ -921,7 +950,8 @@ function SettingsRouteView() {
                     value !== "claudeAgent" &&
                     value !== "cursor" &&
                     value !== "gemini" &&
-                    value !== "opencode"
+                    value !== "opencode" &&
+                    value !== "pi"
                   ) {
                     return;
                   }
@@ -939,6 +969,8 @@ function SettingsRouteView() {
                         <Gemini className="size-3.5 text-foreground" />
                       ) : settings.defaultProvider === "opencode" ? (
                         <OpenCodeIcon className="size-3.5 text-muted-foreground/70" />
+                      ) : settings.defaultProvider === "pi" ? (
+                        <PiIcon className="size-3.5 text-foreground" />
                       ) : (
                         <OpenAI className="size-3.5" />
                       )}
@@ -975,6 +1007,12 @@ function SettingsRouteView() {
                     <span className="flex items-center gap-2">
                       <OpenCodeIcon className="size-3.5 text-muted-foreground/70" />
                       OpenCode
+                    </span>
+                  </SelectItem>
+                  <SelectItem hideIndicator value="pi">
+                    <span className="flex items-center gap-2">
+                      <PiIcon className="size-3.5 text-foreground" />
+                      Pi
                     </span>
                   </SelectItem>
                 </SelectPopup>
@@ -1856,6 +1894,7 @@ function SettingsRouteView() {
                       customCursorModels: defaults.customCursorModels,
                       customGeminiModels: defaults.customGeminiModels,
                       customOpenCodeModels: defaults.customOpenCodeModels,
+                      customPiModels: defaults.customPiModels,
                     });
                     setCustomModelErrorByProvider({});
                     setShowAllCustomModels(false);
@@ -1874,7 +1913,8 @@ function SettingsRouteView() {
                       value !== "claudeAgent" &&
                       value !== "cursor" &&
                       value !== "gemini" &&
-                      value !== "opencode"
+                      value !== "opencode" &&
+                      value !== "pi"
                     ) {
                       return;
                     }
@@ -2005,6 +2045,8 @@ function SettingsRouteView() {
                       openCodeBinaryPath: defaults.openCodeBinaryPath,
                       openCodeServerUrl: defaults.openCodeServerUrl,
                       openCodeServerPassword: defaults.openCodeServerPassword,
+                      piAgentDir: defaults.piAgentDir,
+                      piBinaryPath: defaults.piBinaryPath,
                     });
                     setOpenInstallProviders({
                       codex: false,
@@ -2012,6 +2054,7 @@ function SettingsRouteView() {
                       cursor: false,
                       gemini: false,
                       opencode: false,
+                      pi: false,
                     });
                   }}
                 />
@@ -2033,9 +2076,12 @@ function SettingsRouteView() {
                             settings.cursorApiEndpoint !== defaults.cursorApiEndpoint
                           : providerSettings.provider === "gemini"
                             ? settings.geminiBinaryPath !== defaults.geminiBinaryPath
-                            : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
-                              settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-                              settings.openCodeServerPassword !== defaults.openCodeServerPassword;
+                            : providerSettings.provider === "pi"
+                              ? settings.piBinaryPath !== defaults.piBinaryPath ||
+                                settings.piAgentDir !== defaults.piAgentDir
+                              : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+                                settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
+                                settings.openCodeServerPassword !== defaults.openCodeServerPassword;
                   const binaryPathValue =
                     providerSettings.binaryPathKey === "claudeBinaryPath"
                       ? claudeBinaryPath
@@ -2045,7 +2091,9 @@ function SettingsRouteView() {
                           ? geminiBinaryPath
                           : providerSettings.binaryPathKey === "openCodeBinaryPath"
                             ? openCodeBinaryPath
-                            : codexBinaryPath;
+                            : providerSettings.binaryPathKey === "piBinaryPath"
+                              ? piBinaryPath
+                              : codexBinaryPath;
 
                   return (
                     <Collapsible
@@ -2108,7 +2156,9 @@ function SettingsRouteView() {
                                             : providerSettings.binaryPathKey ===
                                                 "openCodeBinaryPath"
                                               ? { openCodeBinaryPath: event.target.value }
-                                              : { codexBinaryPath: event.target.value },
+                                              : providerSettings.binaryPathKey === "piBinaryPath"
+                                                ? { piBinaryPath: event.target.value }
+                                                : { codexBinaryPath: event.target.value },
                                     )
                                   }
                                   placeholder={providerSettings.binaryPlaceholder}
@@ -2142,6 +2192,34 @@ function SettingsRouteView() {
                                   {providerSettings.homeDescription ? (
                                     <span className="mt-1 block text-xs text-muted-foreground">
                                       {providerSettings.homeDescription}
+                                    </span>
+                                  ) : null}
+                                </label>
+                              ) : null}
+
+                              {providerSettings.agentDirKey ? (
+                                <label
+                                  htmlFor={`provider-install-${providerSettings.agentDirKey}`}
+                                  className="block"
+                                >
+                                  <span className="block text-xs font-medium text-foreground">
+                                    Pi agent directory
+                                  </span>
+                                  <Input
+                                    id={`provider-install-${providerSettings.agentDirKey}`}
+                                    className="mt-1"
+                                    value={piAgentDir}
+                                    onChange={(event) =>
+                                      updateSettings({
+                                        piAgentDir: event.target.value,
+                                      })
+                                    }
+                                    placeholder={providerSettings.agentDirPlaceholder}
+                                    spellCheck={false}
+                                  />
+                                  {providerSettings.agentDirDescription ? (
+                                    <span className="mt-1 block text-xs text-muted-foreground">
+                                      {providerSettings.agentDirDescription}
                                     </span>
                                   ) : null}
                                 </label>

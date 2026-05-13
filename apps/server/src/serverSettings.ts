@@ -9,7 +9,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
-  type ProviderKind,
+  type ProviderWithDefaultModel,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
@@ -79,7 +79,12 @@ export class ServerSettingsService extends ServiceMap.Service<
     );
 }
 
-const PROVIDER_ORDER: readonly ProviderKind[] = ["codex", "claudeAgent", "gemini", "opencode"];
+const PROVIDER_ORDER: readonly ProviderWithDefaultModel[] = [
+  "codex",
+  "claudeAgent",
+  "gemini",
+  "opencode",
+];
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
   const selection = settings.textGenerationModelSelection;

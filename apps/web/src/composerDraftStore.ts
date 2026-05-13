@@ -5,6 +5,7 @@ import {
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
   type ModelSlug,
+  type PiThinkingLevel,
   ModelSelection,
   OrchestrationThreadPullRequest,
   ProjectId,
@@ -670,7 +671,8 @@ function normalizeProviderKind(value: unknown): ProviderKind | null {
     value === "claudeAgent" ||
     value === "cursor" ||
     value === "gemini" ||
-    value === "opencode"
+    value === "opencode" ||
+    value === "pi"
     ? value
     : null;
 }
@@ -731,6 +733,14 @@ function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "opencode" }>["options"] }
           : {}),
       };
+    case "pi":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "pi" }>["options"] }
+          : {}),
+      };
   }
 }
 
@@ -759,6 +769,10 @@ function normalizeProviderModelOptions(
   const openCodeCandidate =
     candidate?.opencode && typeof candidate.opencode === "object"
       ? (candidate.opencode as Record<string, unknown>)
+      : null;
+  const piCandidate =
+    candidate?.pi && typeof candidate.pi === "object"
+      ? (candidate.pi as Record<string, unknown>)
       : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
@@ -890,7 +904,17 @@ function normalizeProviderModelOptions(
           ...(openCodeAgent !== undefined ? { agent: openCodeAgent } : {}),
         }
       : undefined;
-  if (!codex && !claude && !cursor && !gemini && !opencode) {
+  const piThinkingLevel: PiThinkingLevel | undefined =
+    piCandidate?.thinkingLevel === "off" ||
+    piCandidate?.thinkingLevel === "minimal" ||
+    piCandidate?.thinkingLevel === "low" ||
+    piCandidate?.thinkingLevel === "medium" ||
+    piCandidate?.thinkingLevel === "high" ||
+    piCandidate?.thinkingLevel === "xhigh"
+      ? piCandidate.thinkingLevel
+      : undefined;
+  const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
+  if (!codex && !claude && !cursor && !gemini && !opencode && !pi) {
     return null;
   }
   return {
@@ -899,6 +923,7 @@ function normalizeProviderModelOptions(
     ...(cursor ? { cursor } : {}),
     ...(gemini ? { gemini } : {}),
     ...(opencode ? { opencode } : {}),
+    ...(pi ? { pi } : {}),
   };
 }
 
@@ -948,7 +973,9 @@ function normalizeModelSelection(
             ? modelOptions?.cursor
             : provider === "opencode"
               ? modelOptions?.opencode
-              : undefined;
+              : provider === "pi"
+                ? modelOptions?.pi
+                : undefined;
   return makeModelSelection(provider, model, options);
 }
 
@@ -1006,14 +1033,21 @@ function legacyToModelSelectionByProvider(
   const result: Partial<Record<ProviderKind, ModelSelection>> = {};
   // Add entries from the options bag (for non-active providers)
   if (modelOptions) {
-    for (const provider of ["codex", "claudeAgent", "cursor", "gemini", "opencode"] as const) {
+    for (const provider of [
+      "codex",
+      "claudeAgent",
+      "cursor",
+      "gemini",
+      "opencode",
+      "pi",
+    ] as const) {
       const options = modelOptions[provider];
       if (options && Object.keys(options).length > 0) {
-        result[provider] = makeModelSelection(
-          provider,
-          modelSelection?.provider === provider ? modelSelection.model : getDefaultModel(provider),
-          options,
-        );
+        const model =
+          modelSelection?.provider === provider ? modelSelection.model : getDefaultModel(provider);
+        if (model) {
+          result[provider] = makeModelSelection(provider, model, options);
+        }
       }
     }
   }
@@ -1046,8 +1080,12 @@ export function deriveEffectiveComposerModelState(input: {
   };
   const baseModel = resolveModelSlugForProvider(
     input.selectedProvider,
-    input.threadModelSelection?.model ??
-      input.projectModelSelection?.model ??
+    (input.threadModelSelection?.provider === input.selectedProvider
+      ? input.threadModelSelection.model
+      : null) ??
+      (input.projectModelSelection?.provider === input.selectedProvider
+        ? input.projectModelSelection.model
+        : null) ??
       getDefaultModel(input.selectedProvider),
   );
   const persistedThreadModel =
@@ -1068,6 +1106,7 @@ export function deriveEffectiveComposerModelState(input: {
         activeSelection.model,
       )
     : null;
+  const unlistedDraftModel = input.selectedProvider === "pi" ? selectedDraftModel : null;
   const selectedModel =
     resolveAvailableModel(activeSelection?.model) ??
     resolveAvailableModel(
@@ -1083,9 +1122,11 @@ export function deriveEffectiveComposerModelState(input: {
     resolveAvailableModel(selectedDraftModel) ??
     persistedThreadModel ??
     persistedProjectModel ??
+    unlistedDraftModel ??
     input.availableModelOptionsByProvider?.[input.selectedProvider]?.[0]?.slug ??
     selectedDraftModel ??
-    baseModel;
+    baseModel ??
+    ("" as ModelSlug);
   const modelOptions =
     modelSelectionByProviderToOptions(input.draft?.modelSelectionByProvider) ??
     providerModelOptionsFromSelection(input.threadModelSelection) ??
@@ -1110,7 +1151,7 @@ export function resolvePreferredComposerModelSelection(input: {
   defaultProvider?: ProviderKind | null | undefined;
 }): ModelSelection {
   const draftProviderWithSelection =
-    (["codex", "claudeAgent", "cursor", "gemini", "opencode"] as const).find(
+    (["codex", "claudeAgent", "cursor", "gemini", "opencode", "pi"] as const).find(
       (provider) => input.draft?.modelSelectionByProvider?.[provider] !== undefined,
     ) ?? null;
   const preferredProvider =
@@ -1129,8 +1170,8 @@ export function resolvePreferredComposerModelSelection(input: {
     (input.projectModelSelection?.provider === preferredProvider
       ? input.projectModelSelection
       : null) ?? {
-      provider: preferredProvider,
-      model: getDefaultModel(preferredProvider),
+      provider: preferredProvider === "pi" ? "codex" : preferredProvider,
+      model: getDefaultModel(preferredProvider) ?? getDefaultModel("codex"),
     }
   );
 }
@@ -2644,15 +2685,18 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             "cursor",
             "gemini",
             "opencode",
+            "pi",
           ] as const) {
             // Only touch providers explicitly present in the input
             if (!normalizedOpts || !(provider in normalizedOpts)) continue;
             const opts = normalizedOpts[provider];
             const current = nextMap[provider];
             if (opts) {
+              const model = current?.model ?? getDefaultModel(provider);
+              if (!model) continue;
               nextMap[provider] = makeModelSelection(
                 provider,
-                current?.model ?? getDefaultModel(provider),
+                model,
                 opts,
               );
             } else if (current?.options) {
@@ -2702,9 +2746,13 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const nextMap = { ...base.modelSelectionByProvider };
           const currentForProvider = nextMap[normalizedProvider];
           if (providerOpts) {
+            const nextModel = currentForProvider?.model ?? fallbackModel;
+            if (!nextModel) {
+              return state;
+            }
             nextMap[normalizedProvider] = makeModelSelection(
               normalizedProvider,
-              currentForProvider?.model ?? fallbackModel,
+              nextModel,
               providerOpts,
             );
           } else if (currentForProvider?.options) {
@@ -2722,7 +2770,10 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             const stickyBase =
               nextStickyMap[normalizedProvider] ??
               base.modelSelectionByProvider[normalizedProvider] ??
-              makeModelSelection(normalizedProvider, fallbackModel);
+              (fallbackModel ? makeModelSelection(normalizedProvider, fallbackModel) : null);
+            if (!stickyBase) {
+              return state;
+            }
             if (providerOpts) {
               nextStickyMap[normalizedProvider] = makeModelSelection(
                 normalizedProvider,

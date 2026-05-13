@@ -21,7 +21,7 @@ import { LuArrowDownToLine, LuArrowLeft, LuCornerLeftUp, LuFolderPlus } from "re
 import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FolderClosed } from "./FolderClosed";
-import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon } from "./Icons";
+import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon, PiIcon } from "./Icons";
 import { formatRelativeTime } from "./Sidebar";
 import { readNativeApi } from "~/nativeApi";
 import { isMacPlatform } from "~/lib/utils";
@@ -264,6 +264,8 @@ function ProviderIcon(props: { provider: ProviderKind }) {
         <Gemini aria-hidden="true" className="size-[15px] text-foreground" />
       ) : props.provider === "opencode" ? (
         <OpenCodeIcon aria-hidden="true" className="size-[15px] text-muted-foreground/70" />
+      ) : props.provider === "pi" ? (
+        <PiIcon aria-hidden="true" className="size-[15px] text-foreground" />
       ) : (
         <OpenAI aria-hidden="true" className="size-[15px] text-muted-foreground/60" />
       )}

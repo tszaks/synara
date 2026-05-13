@@ -9,6 +9,7 @@ import {
   type CursorModelOptions,
   type GeminiModelOptions,
   type OpenCodeModelOptions,
+  type PiModelOptions,
   type ProviderKind,
   type ProviderModelDescriptor,
 } from "@t3tools/contracts";
@@ -43,6 +44,9 @@ function getRawEffort(
   }
   if (provider === "opencode") {
     return trimOrNull((modelOptions as OpenCodeModelOptions | undefined)?.variant);
+  }
+  if (provider === "pi") {
+    return trimOrNull((modelOptions as PiModelOptions | undefined)?.thinkingLevel);
   }
   const caps = getModelCapabilities(provider, model);
   return getGeminiThinkingSelectionValue(caps, modelOptions as GeminiModelOptions | undefined);

@@ -20,6 +20,7 @@ import {
   normalizeClaudeModelOptions,
   normalizeGeminiModelOptions,
   normalizeOpenCodeModelOptions,
+  normalizePiModelOptions,
   resolveLabeledOptionValue,
   trimOrNull,
 } from "@t3tools/shared/model";
@@ -197,6 +198,12 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizeOpenCodeModelOptions(providerOptions);
       break;
     }
+    case "pi": {
+      const providerOptions = modelOptions?.pi;
+      rawEffort = trimOrNull(providerOptions?.thinkingLevel);
+      normalizedOptions = normalizePiModelOptions(providerOptions);
+      break;
+    }
   }
 
   const draftEffort = trimOrNull(rawEffort);
@@ -253,6 +260,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("opencode", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("opencode", input),
+  },
+  pi: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("pi", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("pi", input),
   },
 };
 
