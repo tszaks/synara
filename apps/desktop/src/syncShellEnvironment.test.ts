@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { syncShellEnvironment } from "./syncShellEnvironment";
+import { syncShellEnvironment, syncShellEnvironmentAsync } from "./syncShellEnvironment";
 
 describe("syncShellEnvironment", () => {
   it("hydrates PATH and missing SSH_AUTH_SOCK from the login shell on macOS", () => {
@@ -256,5 +256,105 @@ describe("syncShellEnvironment", () => {
     expect(readEnvironment).not.toHaveBeenCalled();
     expect(env.PATH).toBe("/usr/bin");
     expect(env.SSH_AUTH_SOCK).toBe("/tmp/inherited.sock");
+  });
+});
+
+describe("syncShellEnvironmentAsync", () => {
+  it("hydrates PATH and missing SSH_AUTH_SOCK via the override reader on macOS", async () => {
+    const env: NodeJS.ProcessEnv = {
+      SHELL: "/bin/zsh",
+      PATH: "/Users/test/.local/bin:/usr/bin",
+    };
+    const readEnvironment = vi.fn(() => ({
+      PATH: "/opt/homebrew/bin:/usr/bin",
+      SSH_AUTH_SOCK: "/tmp/secretive.sock",
+      HOMEBREW_PREFIX: "/opt/homebrew",
+    }));
+
+    await syncShellEnvironmentAsync(env, {
+      platform: "darwin",
+      readEnvironment,
+    });
+
+    expect(readEnvironment).toHaveBeenCalledWith("/bin/zsh", [
+      "PATH",
+      "SSH_AUTH_SOCK",
+      "HOMEBREW_PREFIX",
+      "HOMEBREW_CELLAR",
+      "HOMEBREW_REPOSITORY",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+    ]);
+    expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin:/Users/test/.local/bin");
+    expect(env.SSH_AUTH_SOCK).toBe("/tmp/secretive.sock");
+    expect(env.HOMEBREW_PREFIX).toBe("/opt/homebrew");
+  });
+
+  it("falls back to launchctl PATH on macOS when shell probing does not return one", async () => {
+    const env: NodeJS.ProcessEnv = {
+      SHELL: "/opt/homebrew/bin/nu",
+      PATH: "/usr/bin",
+    };
+    const readEnvironment = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("unknown flag");
+      })
+      .mockImplementationOnce(() => ({}));
+    const readLaunchctlPath = vi.fn(() => "/opt/homebrew/bin:/usr/bin");
+    const logWarning = vi.fn();
+
+    await syncShellEnvironmentAsync(env, {
+      platform: "darwin",
+      readEnvironment,
+      readLaunchctlPath,
+      userShell: "/bin/zsh",
+      logWarning,
+    });
+
+    expect(readEnvironment).toHaveBeenCalledTimes(2);
+    expect(readLaunchctlPath).toHaveBeenCalledTimes(1);
+    expect(logWarning).toHaveBeenCalledWith(
+      "Failed to read login shell environment from /opt/homebrew/bin/nu.",
+      expect.any(Error),
+    );
+    expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
+  });
+
+  it("hydrates PATH and missing variables from the Windows registry", async () => {
+    const env: NodeJS.ProcessEnv = {
+      PATH: "C:\\Windows\\system32",
+    };
+    const readWindowsEnvironment = vi.fn(() => ({
+      PATH: "C:\\Windows\\system32;C:\\Users\\ramar\\.local\\bin",
+      CLAUDE_CONFIG_DIR: "C:\\Users\\ramar\\.config\\claude",
+    }));
+
+    await syncShellEnvironmentAsync(env, {
+      platform: "win32",
+      readWindowsEnvironment,
+    });
+
+    expect(readWindowsEnvironment).toHaveBeenCalledTimes(1);
+    expect(env.PATH).toBe("C:\\Windows\\system32;C:\\Users\\ramar\\.local\\bin");
+    expect(env.CLAUDE_CONFIG_DIR).toBe("C:\\Users\\ramar\\.config\\claude");
+  });
+
+  it("does nothing on unsupported platforms", async () => {
+    const env: NodeJS.ProcessEnv = {
+      SHELL: "/bin/zsh",
+      PATH: "/usr/bin",
+    };
+    const readEnvironment = vi.fn(() => ({
+      PATH: "/opt/homebrew/bin:/usr/bin",
+    }));
+
+    await syncShellEnvironmentAsync(env, {
+      platform: "freebsd",
+      readEnvironment,
+    });
+
+    expect(readEnvironment).not.toHaveBeenCalled();
+    expect(env.PATH).toBe("/usr/bin");
   });
 });

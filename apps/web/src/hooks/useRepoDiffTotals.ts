@@ -4,12 +4,23 @@
 //          badge and the Environment panel "Changes" row so both read the same numbers.
 // Layer: Chat git data hook
 
+import { createCachedImport } from "@t3tools/shared/lazyImport";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { summarizePatchTotals } from "~/lib/diffRendering";
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { useRepoDiffScopeStore } from "~/repoDiffScopeStore";
+
+type SummarizePatchTotalsFn = typeof import("~/lib/patchParsing").summarizePatchTotals;
+
+// summarizePatchTotals pulls the whole @pierre/diffs parser (the vendor-diffs chunk),
+// and this hook sits in the eager chat-route render path. Load the parser on demand —
+// once per app session — so the chunk stays out of the initial bundle. After the first
+// load every consumer computes totals synchronously again via the module-level cache.
+let loadedSummarizePatchTotals: SummarizePatchTotalsFn | null = null;
+const loadPatchParsing = createCachedImport(() => import("~/lib/patchParsing"));
+
+const PATCH_PARSING_RETRY_DELAY_MS = 5_000;
 
 export interface RepoDiffTotals {
   additions: number;
@@ -39,10 +50,44 @@ export function useRepoDiffTotals({
       refetchInterval,
     }),
   );
+  const [summarizePatchTotals, setSummarizePatchTotals] = useState(
+    () => loadedSummarizePatchTotals,
+  );
+  useEffect(() => {
+    if (summarizePatchTotals) {
+      return;
+    }
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = () => {
+      loadPatchParsing().then(
+        (module) => {
+          loadedSummarizePatchTotals = module.summarizePatchTotals;
+          if (!cancelled) {
+            setSummarizePatchTotals(() => module.summarizePatchTotals);
+          }
+        },
+        () => {
+          // Chunk fetch failed (offline, mid-deploy). createCachedImport already
+          // cleared its cache; retry while mounted so the badge heals without a reload.
+          if (!cancelled) {
+            retryTimer = setTimeout(attempt, PATCH_PARSING_RETRY_DELAY_MS);
+          }
+        },
+      );
+    };
+    attempt();
+    return () => {
+      cancelled = true;
+      if (retryTimer !== undefined) {
+        clearTimeout(retryTimer);
+      }
+    };
+  }, [summarizePatchTotals]);
   // Patch parsing can be noticeable on large diffs; only redo it when the patch text changes.
   const totals = useMemo(
-    () => summarizePatchTotals(selectedRepoDiff?.patch),
-    [selectedRepoDiff?.patch],
+    () => (summarizePatchTotals ? summarizePatchTotals(selectedRepoDiff?.patch) : null),
+    [summarizePatchTotals, selectedRepoDiff?.patch],
   );
   const additions = totals?.additions ?? 0;
   const deletions = totals?.deletions ?? 0;

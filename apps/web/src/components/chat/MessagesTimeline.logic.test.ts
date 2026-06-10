@@ -735,4 +735,77 @@ describe("deriveMessagesTimelineRows", () => {
     expect(rows.some((row) => row.kind === "proposed-plan")).toBe(true);
     expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["narration:a1", "work:w1"]);
   });
+
+  it("collapses consecutive settled turns independently", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool A"),
+        assistantEntry("a1", "2026-01-01T00:00:02Z", {
+          turnId: "t1",
+          text: "First answer",
+          completedAt: "2026-01-01T00:00:02Z",
+        }),
+        userEntry("u2", "2026-01-01T00:00:03Z"),
+        workEntry("w2", "2026-01-01T00:00:04Z", "tool B"),
+        assistantEntry("a2", "2026-01-01T00:00:05Z", {
+          turnId: "t2",
+          text: "Second answer",
+          completedAt: "2026-01-01T00:00:05Z",
+        }),
+      ],
+    });
+
+    const visibleMessageIds = rows
+      .filter((row): row is MessageTimelineRow => row.kind === "message")
+      .map((row) => String(row.message.id));
+    expect(visibleMessageIds).toEqual(["u1", "a1", "u2", "a2"]);
+
+    expect(collapsedSignature(messageRow(rows, "a1")!)).toEqual(["work:w1"]);
+    expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["work:w2"]);
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("collapses a turn that begins immediately at the start of the timeline (no preceding user message)", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        workEntry("w1", "2026-01-01T00:00:01Z", "initial tool"),
+        assistantEntry("a1", "2026-01-01T00:00:02Z", {
+          turnId: "t1",
+          text: "System reply",
+          completedAt: "2026-01-01T00:00:02Z",
+        }),
+      ],
+    });
+
+    expect(collapsedSignature(messageRow(rows, "a1")!)).toEqual(["work:w1"]);
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("handles three or more consecutive work rows being folded into one turn", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "step 1"),
+        workEntry("w2", "2026-01-01T00:00:02Z", "step 2"),
+        workEntry("w3", "2026-01-01T00:00:03Z", "step 3"),
+        assistantEntry("a1", "2026-01-01T00:00:04Z", {
+          turnId: "t1",
+          text: "Done",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+
+    const terminal = messageRow(rows, "a1");
+    expect(terminal).toBeDefined();
+    // w1, w2, w3 are grouped into a single work row before collapsing,
+    // so they appear as three individual work items inside the collapsed turn.
+    const workItems = (terminal!.collapsedTurnItems ?? []).filter((item) => item.kind === "work");
+    expect(workItems.map((item) => item.id)).toEqual(["w1", "w2", "w3"]);
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
 });

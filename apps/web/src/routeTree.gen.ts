@@ -30,12 +30,14 @@ const ChatSettingsRoute = ChatSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
   getParentRoute: () => ChatRoute,
-} as any)
+} as any).lazy(() =>
+  import('./routes/_chat.settings.lazy').then((d) => d.Route),
+)
 const ChatPluginsRoute = ChatPluginsRouteImport.update({
   id: '/plugins',
   path: '/plugins',
   getParentRoute: () => ChatRoute,
-} as any)
+} as any).lazy(() => import('./routes/_chat.plugins.lazy').then((d) => d.Route))
 const ChatThreadIdRoute = ChatThreadIdRouteImport.update({
   id: '/$threadId',
   path: '/$threadId',

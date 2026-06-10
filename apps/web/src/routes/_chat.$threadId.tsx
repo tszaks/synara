@@ -30,7 +30,6 @@ import ChatView from "../components/ChatView";
 import BrowserPanel from "../components/BrowserPanel";
 import { ProviderIcon } from "../components/ProviderIcon";
 import { ChatPaneDropOverlay } from "../components/chat-drop-overlay/ChatPaneDropOverlay";
-import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {
   DiffPanelHeaderSkeleton,
   DiffPanelLoadingState,
@@ -70,9 +69,15 @@ import {
   resolveActivePane,
 } from "../rightDockStore.logic";
 import { RightDock } from "../components/chat/RightDock";
-import { DockTerminalPane } from "../components/chat/DockTerminalPane";
+const DockTerminalPane = lazy(() =>
+  import("../components/chat/DockTerminalPane").then((m) => ({ default: m.DockTerminalPane })),
+);
 import { CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "../components/chat/chatHeaderControls";
-import { GitPanel } from "../components/chat/GitPanel";
+// GitPanel renders @pierre/diffs file diffs; load it (and the vendor-diffs chunk)
+// only when a git pane is actually opened.
+const GitPanel = lazy(() =>
+  import("../components/chat/GitPanel").then((m) => ({ default: m.GitPanel })),
+);
 import { PanelStateMessage } from "../components/chat/PanelStateMessage";
 import {
   RIGHT_DOCK_ADD_MENU_KINDS,
@@ -121,6 +126,13 @@ import { cn } from "~/lib/utils";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
+// The worker pool provider statically imports @pierre/diffs/react plus the diff worker
+// bundle; keep it in the same lazy boundary as DiffPanel so opening a diff loads both.
+const DiffWorkerPoolProvider = lazy(() =>
+  import("../components/DiffWorkerPoolProvider").then((m) => ({
+    default: m.DiffWorkerPoolProvider,
+  })),
+);
 // Open the dock as a true 50/50 split of the chat area: `50vw - 8rem` is half the
 // viewport minus half the fixed 16rem left sidebar, so the chat and dock match.
 // `max()` keeps a sane minimum on narrow screens but never caps the half-width.
@@ -162,8 +174,8 @@ const LazyDiffPanel = (props: {
   queriesEnabled?: boolean;
 }) => {
   return (
-    <DiffWorkerPoolProvider>
-      <Suspense fallback={<DiffLoadingFallback mode={props.mode} />}>
+    <Suspense fallback={<DiffLoadingFallback mode={props.mode} />}>
+      <DiffWorkerPoolProvider>
         <DiffPanel
           mode={props.mode}
           {...(props.threadId !== undefined ? { threadId: props.threadId } : {})}
@@ -175,8 +187,8 @@ const LazyDiffPanel = (props: {
             : {})}
           {...(props.queriesEnabled !== undefined ? { queriesEnabled: props.queriesEnabled } : {})}
         />
-      </Suspense>
-    </DiffWorkerPoolProvider>
+      </DiffWorkerPoolProvider>
+    </Suspense>
   );
 };
 
@@ -1623,19 +1635,23 @@ function SingleChatSurface(props: {
           // mounted (offcanvas is CSS-only), so without this the off-screen terminal
           // would keep WebGL + resize observers alive for nothing.
           return (
-            <DockTerminalPane
-              hostThreadId={props.threadId}
-              projectId={props.projectId}
-              isActive={context.isActive && dockState.open}
-            />
+            <Suspense fallback={null}>
+              <DockTerminalPane
+                hostThreadId={props.threadId}
+                projectId={props.projectId}
+                isActive={context.isActive && dockState.open}
+              />
+            </Suspense>
           );
         case "git":
           return (
-            <GitPanel
-              hostThreadId={props.threadId}
-              projectId={props.projectId}
-              onClose={() => closePane(props.threadId, pane.id)}
-            />
+            <Suspense fallback={null}>
+              <GitPanel
+                hostThreadId={props.threadId}
+                projectId={props.projectId}
+                onClose={() => closePane(props.threadId, pane.id)}
+              />
+            </Suspense>
           );
         case "sidechat":
           if (!pane.threadId) {

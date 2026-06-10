@@ -16,12 +16,12 @@ import { memo, useCallback, useMemo, useState } from "react";
 import { useTheme } from "~/hooks/useTheme";
 import {
   buildFileDiffRenderKey,
-  getRenderablePatch,
   resolveFileDiffPath,
   sortFileDiffsByPath,
   splitRepoRelativePath,
   summarizeFileDiffStats,
 } from "~/lib/diffRendering";
+import { getRenderablePatch } from "~/lib/patchParsing";
 import {
   gitQueryKeys,
   gitStageFilesMutationOptions,

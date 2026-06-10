@@ -1,9 +1,10 @@
 // FILE: diffRendering.ts
 // Purpose: Shared helpers for rendering, caching, copying, and summarizing git patches.
 // Layer: Web diff utilities
-// Depends on: @pierre/diffs patch parsing
+// Depends on: @pierre/diffs types only. Runtime patch parsing lives in patchParsing.ts so
+//             this module stays importable from the eager route bundle without pulling
+//             the vendor-diffs chunk.
 
-import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 
 export const DIFF_THEME_NAMES = {
@@ -184,38 +185,6 @@ export type RenderablePatch =
       reason: string;
     };
 
-export function getRenderablePatch(
-  patch: string | undefined,
-  cacheScope = "diff-panel",
-): RenderablePatch | null {
-  if (!patch) return null;
-  const normalizedPatch = patch.trim();
-  if (normalizedPatch.length === 0) return null;
-
-  try {
-    const parsedPatches = parsePatchFiles(
-      normalizedPatch,
-      buildPatchCacheKey(normalizedPatch, cacheScope),
-    );
-    const files = parsedPatches.flatMap((parsedPatch) => parsedPatch.files);
-    if (files.length > 0) {
-      return { kind: "files", files };
-    }
-
-    return {
-      kind: "raw",
-      text: normalizedPatch,
-      reason: "Unsupported diff format. Showing raw patch.",
-    };
-  } catch {
-    return {
-      kind: "raw",
-      text: normalizedPatch,
-      reason: "Failed to parse patch. Showing raw patch.",
-    };
-  }
-}
-
 // Resolve the working-tree-relative path for a parsed file diff, stripping the
 // conventional `a/` / `b/` patch prefixes so callers can match git status paths.
 export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
@@ -280,11 +249,4 @@ export function summarizeRenderablePatchStats(
     return null;
   }
   return { ...summarizeFileDiffStats(renderable.files), fileCount: renderable.files.length };
-}
-
-export function summarizePatchTotals(
-  patch: string | undefined,
-): { additions: number; deletions: number; fileCount: number } | null {
-  const renderable = getRenderablePatch(patch, "diff-panel:stats");
-  return summarizeRenderablePatchStats(renderable);
 }

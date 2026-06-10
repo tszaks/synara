@@ -2,16 +2,18 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import zlib from "node:zlib";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DateTime, Effect, FileSystem, Path } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createHttpRequestHandler, isLegacyTokenAuthorized } from "./http";
 import type { ServerAuthShape } from "./auth/Services/ServerAuth";
 import { deriveServerPaths, type ServerConfigShape } from "./config";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import type { ServerReadiness } from "./server/readiness";
+import { _resetCacheForTests } from "./staticAssetCache";
 
 const tempDirs: string[] = [];
 
@@ -307,3 +309,159 @@ describe("createHttpRequestHandler", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cache headers, compression, and ETag tests
+// ---------------------------------------------------------------------------
+
+describe("serveStaticAsset — cache headers + compression", () => {
+  beforeEach(() => {
+    _resetCacheForTests();
+  });
+
+  it("serves hashed assets under assets/ with immutable Cache-Control", async () => {
+    const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-static-cache-test-"));
+    tempDirs.push(staticDir);
+    fs.mkdirSync(path.join(staticDir, "assets"), { recursive: true });
+    fs.writeFileSync(path.join(staticDir, "assets", "index-DGfPhPk3.js"), "console.log(1)");
+    fs.writeFileSync(path.join(staticDir, "index.html"), "<main>app</main>");
+    const config = await makeConfig({ staticDir });
+    const handler = await makeHandler(config);
+
+    await withServer(handler, async (origin) => {
+      const response = await fetch(`${origin}/assets/index-DGfPhPk3.js`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    });
+  });
+
+  it("serves index.html with no-cache Cache-Control and an ETag", async () => {
+    const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-static-etag-test-"));
+    tempDirs.push(staticDir);
+    fs.writeFileSync(path.join(staticDir, "index.html"), "<main>etag-test</main>");
+    const config = await makeConfig({ staticDir });
+    const handler = await makeHandler(config);
+
+    await withServer(handler, async (origin) => {
+      const response = await fetch(`${origin}/`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-cache");
+      expect(response.headers.get("etag")).toBeTruthy();
+    });
+  });
+
+  it("responds 304 when If-None-Match matches the ETag of index.html", async () => {
+    const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-static-304-test-"));
+    tempDirs.push(staticDir);
+    fs.writeFileSync(path.join(staticDir, "index.html"), "<main>conditional</main>");
+    const config = await makeConfig({ staticDir });
+    const handler = await makeHandler(config);
+
+    await withServer(handler, async (origin) => {
+      // First request: get the ETag.
+      const first = await fetch(`${origin}/`);
+      expect(first.status).toBe(200);
+      const etag = first.headers.get("etag");
+      expect(etag).toBeTruthy();
+
+      // Second request with matching If-None-Match: should be 304.
+      const second = await fetch(`${origin}/`, {
+        headers: { "If-None-Match": etag! },
+      });
+      expect(second.status).toBe(304);
+    });
+  });
+
+  it("compresses hashed JS assets with brotli when Accept-Encoding includes br", async () => {
+    const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-static-br-test-"));
+    tempDirs.push(staticDir);
+    fs.mkdirSync(path.join(staticDir, "assets"), { recursive: true });
+    const jsContent = "const x = 'hello world, compressible content';";
+    fs.writeFileSync(path.join(staticDir, "assets", "app-AbCd1234.js"), jsContent);
+    fs.writeFileSync(path.join(staticDir, "index.html"), "<main>app</main>");
+    const config = await makeConfig({ staticDir });
+    const handler = await makeHandler(config);
+
+    await withServer(handler, async (origin) => {
+      // Use raw Node http.get to avoid automatic decompression by undici/fetch.
+      const { statusCode, headers, body } = await rawGet(origin, "/assets/app-AbCd1234.js", {
+        "Accept-Encoding": "br, gzip, deflate",
+      });
+      expect(statusCode).toBe(200);
+      expect(headers["content-encoding"]).toBe("br");
+      expect(headers["vary"]).toContain("Accept-Encoding");
+      const decompressed = zlib.brotliDecompressSync(body).toString();
+      expect(decompressed).toBe(jsContent);
+    });
+  });
+
+  it("falls back to gzip when Accept-Encoding does not include br", async () => {
+    const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-static-gz-test-"));
+    tempDirs.push(staticDir);
+    fs.mkdirSync(path.join(staticDir, "assets"), { recursive: true });
+    const jsContent = "const y = 'gzip fallback content';";
+    fs.writeFileSync(path.join(staticDir, "assets", "chunk-XyZ98765.js"), jsContent);
+    fs.writeFileSync(path.join(staticDir, "index.html"), "<main>app</main>");
+    const config = await makeConfig({ staticDir });
+    const handler = await makeHandler(config);
+
+    await withServer(handler, async (origin) => {
+      const { statusCode, headers, body } = await rawGet(origin, "/assets/chunk-XyZ98765.js", {
+        "Accept-Encoding": "gzip, deflate",
+      });
+      expect(statusCode).toBe(200);
+      expect(headers["content-encoding"]).toBe("gzip");
+      const decompressed = zlib.gunzipSync(body).toString();
+      expect(decompressed).toBe(jsContent);
+    });
+  });
+
+  it("returns identity encoding when Accept-Encoding is absent", async () => {
+    const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-static-identity-test-"));
+    tempDirs.push(staticDir);
+    fs.mkdirSync(path.join(staticDir, "assets"), { recursive: true });
+    const jsContent = "const z = 'no encoding';";
+    fs.writeFileSync(path.join(staticDir, "assets", "plain-000.js"), jsContent);
+    fs.writeFileSync(path.join(staticDir, "index.html"), "<main>app</main>");
+    const config = await makeConfig({ staticDir });
+    const handler = await makeHandler(config);
+
+    await withServer(handler, async (origin) => {
+      // No Accept-Encoding header → identity (uncompressed) response.
+      const { statusCode, headers, body } = await rawGet(origin, "/assets/plain-000.js", {});
+      expect(statusCode).toBe(200);
+      expect(headers["content-encoding"]).toBeUndefined();
+      expect(body.toString()).toBe(jsContent);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Low-level helper: raw HTTP GET without automatic decompression
+// ---------------------------------------------------------------------------
+
+function rawGet(
+  origin: string,
+  urlPath: string,
+  reqHeaders: Record<string, string>,
+): Promise<{ statusCode: number; headers: http.IncomingHttpHeaders; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlPath, origin);
+    const req = http.get(
+      { hostname: url.hostname, port: Number(url.port), path: url.pathname, headers: reqHeaders },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          resolve({
+            statusCode: res.statusCode ?? 0,
+            headers: res.headers,
+            body: Buffer.concat(chunks),
+          });
+        });
+        res.on("error", reject);
+      },
+    );
+    req.on("error", reject);
+  });
+}

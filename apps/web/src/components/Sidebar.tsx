@@ -4,16 +4,11 @@
 
 import {
   ArchiveIcon,
-  ArrowLeftIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
   CopyIcon,
   DisposableThreadIcon,
   ExternalLinkIcon,
   FolderIcon,
   FolderOpenIcon,
-  GitMergedSimpleIcon,
-  GitPullRequestIcon,
   type LucideIcon,
   NewThreadIcon,
   PencilIcon,
@@ -28,13 +23,10 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
-import { FiGitBranch, FiPlus } from "react-icons/fi";
-import { GoRepoForked } from "react-icons/go";
-import { HiOutlineArchiveBox, HiOutlineCheckCircle } from "react-icons/hi2";
+import { FiPlus } from "react-icons/fi";
 import { BsChat } from "react-icons/bs";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
-import { LuSplit } from "react-icons/lu";
 import {
   useCallback,
   useEffect,
@@ -45,7 +37,6 @@ import {
   useState,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
-  type ReactNode,
 } from "react";
 import {
   DndContext,
@@ -75,7 +66,6 @@ import {
   type ResolvedKeybindingsConfig,
   type ServerLocalServerProcess,
 } from "@t3tools/contracts";
-import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { getDefaultModel } from "@t3tools/shared/model";
 import { pluralize } from "@t3tools/shared/text";
 import { localServerAddressLabel, localServerMatchesRun } from "@t3tools/shared/localServers";
@@ -104,7 +94,6 @@ import {
   createAllThreadsSelector,
   createSidebarDisplayThreadsSelector,
   createSidebarThreadSummariesSelector,
-  createThreadSelector,
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import {
@@ -128,23 +117,17 @@ import {
 import { readNativeApi } from "../nativeApi";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
 import { useComposerDraftStore } from "../composerDraftStore";
-import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
-import { ProviderIcon } from "./ProviderIcon";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { SidebarIconButton } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
-import { SidebarMetaChipStack } from "./SidebarMetaChip";
-import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
-import { SidebarGlyph, sidebarGlyphClass } from "./sidebarGlyphs";
-import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
-import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
+import { SidebarGlyph } from "./sidebarGlyphs";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import {
@@ -243,10 +226,7 @@ import {
   resolveProjectEmptyState,
   resolveSettingsBackTarget,
   resolveSidebarNewThreadEnvMode,
-  resolveThreadRowClassName,
-  resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
-  type ThreadStatusPill,
   isDuplicateProjectCreateError,
   type SidebarDerivedProjectData,
   shouldShowDebugFeatureFlagsMenu,
@@ -256,7 +236,6 @@ import {
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import type { LastThreadRoute } from "../chatRouteRestore";
-import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
 import { cn } from "~/lib/utils";
@@ -269,13 +248,11 @@ import { getInitialBrowseQuery } from "~/lib/projectPaths";
 import {
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
-  resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { normalizeSettingsSection } from "../settingsNavigation";
 import {
-  SIDEBAR_HEADER_LABEL_CLASS_NAME,
   SIDEBAR_HEADER_ROW_CLASS_NAME,
   SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
   SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME,
@@ -291,13 +268,17 @@ import {
   resolveSplitViewFocusedThreadId,
   resolveSplitViewPaneIdForThread,
   selectSplitView,
-  type SplitViewId,
   useSplitViewStore,
 } from "../splitViewStore";
-import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
+import { terminalStatusFromThreadState, type ThreadPr } from "./sidebar/threadRowShared";
+import { SidebarThreadRow, type ThreadRowCallbacks } from "./sidebar/SidebarThreadRow";
+import {
+  SidebarPinnedThreadRow,
+  type PinnedThreadRowCallbacks,
+} from "./sidebar/SidebarPinnedThreadRow";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
@@ -329,7 +310,6 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   easing: "ease-out",
 } as const;
 const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
-const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const ADD_PROJECT_EXISTING_SYNC_ERROR =
@@ -473,35 +453,6 @@ function buildThreadJumpLabelMap(input: {
   }
   return mapping.size > 0 ? mapping : EMPTY_THREAD_JUMP_LABELS;
 }
-function WorktreeBadgeGlyph({ className }: { className?: string }) {
-  return (
-    <LuSplit aria-hidden="true" className={cn("rotate-90", sidebarGlyphClass("meta", className))} />
-  );
-}
-
-// Trailing status indicator shown in the timestamp slot: spinner while working,
-// check when completed, otherwise a colored status dot. Replaces the relative
-// timestamp whenever the thread has an active/unseen status.
-function ThreadStatusTrailingGlyph({ threadStatus }: { threadStatus: ThreadStatusPill }) {
-  if (threadStatus.label === "Completed") {
-    return (
-      <HiOutlineCheckCircle
-        aria-hidden="true"
-        className={cn("size-3.5 shrink-0", threadStatus.colorClass)}
-      />
-    );
-  }
-  if (threadStatus.pulse) {
-    return <ThreadRunningSpinner />;
-  }
-  return (
-    <span
-      aria-hidden="true"
-      className={cn("size-1.5 shrink-0 rounded-full", threadStatus.dotClass)}
-    />
-  );
-}
-
 /** Pulsing green dot shown before a thread or project name while a dev run is live. */
 function ProjectRunIndicatorDot({ className }: { className?: string }) {
   return (
@@ -515,297 +466,6 @@ function ProjectRunIndicatorDot({ className }: { className?: string }) {
     />
   );
 }
-
-/** Meta chips fade on row hover so pin/archive actions can occupy the same slot. */
-const THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME =
-  "flex shrink-0 items-center transition-opacity group-hover/thread-row:pointer-events-none group-hover/thread-row:opacity-0 group-focus-within/thread-row:pointer-events-none group-focus-within/thread-row:opacity-0";
-
-/** Fixed-width timestamp/status column; fades on hover so pin/archive can overlay this slot. */
-function threadRowTimestampSlotClassName(
-  isSubagentThread: boolean,
-  toneClassName?: string,
-): string {
-  return cn(
-    "mr-1 flex shrink-0 items-center justify-end leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
-    isSubagentThread
-      ? "w-[1.2rem] text-[10px]"
-      : "w-[1.625rem] text-[length:var(--app-font-size-ui-meta,11px)]",
-    toneClassName ?? (isSubagentThread ? "text-muted-foreground/26" : "text-muted-foreground/38"),
-  );
-}
-
-function resolveWorktreeBadgeLabel(
-  thread: Pick<Thread, "envMode" | "worktreePath">,
-): string | null {
-  return resolveThreadEnvironmentPresentation({
-    envMode: thread.envMode,
-    worktreePath: thread.worktreePath,
-  }).worktreeBadgeLabel;
-}
-
-type ThreadMetaChip = {
-  id: "handoff" | "fork" | "worktree";
-  tooltip: string;
-  icon: ReactNode;
-};
-
-/**
- * Back-to-front order: first = behind, last = in front.
- * Priority lowest -> highest: handoff -> fork -> worktree. Sidechats skip fork/disposable
- * badges because the "Sidechat:" title already identifies them.
- */
-function resolveThreadRowMetaChips(input: {
-  thread: Pick<
-    Thread,
-    "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
-  >;
-  includeHandoffBadge: boolean;
-  /**
-   * When the leading provider avatar already renders the source → target handoff
-   * pair, the trailing handoff chip is a redundant double icon and is dropped.
-   */
-  handoffShownInAvatar?: boolean;
-}): ThreadMetaChip[] {
-  const chips: ThreadMetaChip[] = [];
-  const isSidechatThread = Boolean(input.thread.sidechatSourceThreadId);
-
-  const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(input.thread);
-  if (input.includeHandoffBadge && !input.handoffShownInAvatar && handoffBadgeLabel) {
-    chips.push({
-      id: "handoff",
-      tooltip: handoffBadgeLabel,
-      icon: <SidebarGlyph icon={FiGitBranch} variant="meta" className="text-muted-foreground/55" />,
-    });
-  }
-
-  if (input.thread.forkSourceThreadId && !isSidechatThread) {
-    chips.push({
-      id: "fork",
-      tooltip: "Forked thread",
-      icon: (
-        <SidebarGlyph
-          icon={GoRepoForked}
-          variant="meta"
-          className="text-emerald-600 dark:text-emerald-300/90"
-        />
-      ),
-    });
-  }
-
-  const worktreeBadgeLabel = resolveWorktreeBadgeLabel(input.thread);
-  if (worktreeBadgeLabel) {
-    chips.push({
-      id: "worktree",
-      tooltip: worktreeBadgeLabel,
-      icon: <WorktreeBadgeGlyph className="text-muted-foreground/55" />,
-    });
-  }
-
-  return chips;
-}
-
-function ProviderAvatarWithTerminal({
-  provider,
-  handoffSourceProvider,
-  handoffTooltip,
-  terminalStatus,
-  terminalCount,
-}: {
-  provider: ProviderKind;
-  handoffSourceProvider?: ProviderKind | null;
-  handoffTooltip?: string | null;
-  terminalStatus: TerminalStatusIndicator | null;
-  terminalCount: number;
-}) {
-  const showBadge = terminalCount > 1 || terminalStatus !== null;
-  const badgeTooltip =
-    terminalCount > 1
-      ? `${terminalCount} ${pluralize(terminalCount, "terminal")} open`
-      : (terminalStatus?.label ?? "Terminal open");
-  const badgeColorClass = terminalStatus?.colorClass ?? "text-muted-foreground/55";
-
-  const hasHandoff = Boolean(handoffSourceProvider);
-  const containerClass = hasHandoff
-    ? "relative inline-flex h-3 w-4.5 shrink-0 items-center"
-    : "relative inline-flex size-3 shrink-0 items-center justify-center";
-
-  const avatarNode = hasHandoff ? (
-    <span className={containerClass}>
-      <span className="sidebar-icon-chip absolute left-0 top-1/2 inline-flex size-3 -translate-y-1/2 items-center justify-center rounded-full">
-        <ProviderIcon provider={handoffSourceProvider!} className="size-2" />
-      </span>
-      <span className="sidebar-icon-chip absolute right-0 top-1/2 z-10 inline-flex size-3 -translate-y-1/2 items-center justify-center rounded-full">
-        <ProviderIcon provider={provider} className="size-2" />
-      </span>
-    </span>
-  ) : (
-    <span className={containerClass}>
-      <ProviderIcon provider={provider} className="size-3" />
-    </span>
-  );
-
-  const wrappedAvatar =
-    hasHandoff && handoffTooltip ? (
-      <Tooltip>
-        <TooltipTrigger render={avatarNode} />
-        <TooltipPopup side="top">{handoffTooltip}</TooltipPopup>
-      </Tooltip>
-    ) : (
-      avatarNode
-    );
-
-  return (
-    <span className="relative inline-flex shrink-0 items-center">
-      {wrappedAvatar}
-      {showBadge ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                aria-label={badgeTooltip}
-                className="sidebar-icon-chip absolute -top-1.5 -right-1.5 inline-flex size-3 min-w-3 items-center justify-center rounded-full px-px"
-              >
-                {terminalCount > 1 ? (
-                  <span
-                    className={cn(
-                      "text-[8px] font-semibold leading-none tabular-nums",
-                      badgeColorClass,
-                    )}
-                  >
-                    {terminalCount}
-                  </span>
-                ) : (
-                  <TerminalIcon className={cn("size-2.5", badgeColorClass)} />
-                )}
-              </span>
-            }
-          />
-          <TooltipPopup side="top">{badgeTooltip}</TooltipPopup>
-        </Tooltip>
-      ) : null}
-    </span>
-  );
-}
-
-type SidebarSplitPreview = {
-  title: string;
-  provider: ProviderKind;
-  threadId: ThreadId | null;
-};
-
-function renderSubagentLabel(input: {
-  threadId: string;
-  parentThreadId?: string | null | undefined;
-  agentId?: string | null | undefined;
-  nickname?: string | null | undefined;
-  role?: string | null | undefined;
-  title?: string | null | undefined;
-  threads?: ReadonlyArray<Thread> | undefined;
-  titleClassName?: string | undefined;
-  roleClassName?: string | undefined;
-}) {
-  const presentation = resolveSubagentPresentationForThread({
-    thread: {
-      id: input.threadId,
-      parentThreadId: input.parentThreadId,
-      subagentAgentId: input.agentId,
-      subagentNickname: input.nickname,
-      subagentRole: input.role,
-      title: input.title,
-    },
-    threads: input.threads,
-  });
-  const supportingLabel =
-    presentation.role ??
-    (presentation.nickname && presentation.title && presentation.title !== presentation.nickname
-      ? presentation.title
-      : null);
-
-  return (
-    <span className="min-w-0 truncate">
-      <span
-        className={cn("font-medium", input.titleClassName)}
-        style={{ color: presentation.accentColor }}
-      >
-        {presentation.nickname ?? presentation.primaryLabel}
-      </span>
-      {supportingLabel ? (
-        <span className={cn("ml-1 text-muted-foreground/48", input.roleClassName)}>
-          {presentation.role ? `(${presentation.role})` : supportingLabel}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
-function SidebarSubagentLabel(props: {
-  threadId: ThreadId;
-  parentThreadId?: ThreadId | null | undefined;
-  agentId?: string | null | undefined;
-  nickname?: string | null | undefined;
-  role?: string | null | undefined;
-  title?: string | null | undefined;
-  titleClassName?: string | undefined;
-  roleClassName?: string | undefined;
-}) {
-  const selectParentThread = useMemo(
-    () => createThreadSelector(props.parentThreadId ?? null),
-    [props.parentThreadId],
-  );
-  const parentThread = useStore(selectParentThread);
-
-  return renderSubagentLabel({
-    threadId: props.threadId,
-    parentThreadId: props.parentThreadId,
-    agentId: props.agentId,
-    nickname: props.nickname,
-    role: props.role,
-    title: props.title,
-    threads: parentThread ? [parentThread] : undefined,
-    titleClassName: props.titleClassName,
-    roleClassName: props.roleClassName,
-  });
-}
-
-function resolveSplitPreviewTitle(input: {
-  thread: Pick<SidebarThreadSummary, "title"> | null;
-  draftPrompt: string | null;
-}): string {
-  if (input.thread?.title) {
-    return input.thread.title;
-  }
-  const draftPrompt = input.draftPrompt?.trim() ?? "";
-  if (draftPrompt.length > 0) {
-    return draftPrompt;
-  }
-  return "New chat";
-}
-
-export function formatRelativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
-
-interface TerminalStatusIndicator {
-  label: "Terminal input needed" | "Terminal task completed" | "Terminal process running";
-  colorClass: string;
-  pulse: boolean;
-}
-
-interface PrStatusIndicator {
-  label: "PR open" | "PR closed" | "PR merged";
-  colorClass: string;
-  icon: LucideIcon;
-  tooltip: string;
-  url: string;
-}
-
-type ThreadPr = GitStatusResult["pr"];
 
 function toThreadPr(
   pr:
@@ -827,101 +487,6 @@ function toThreadPr(
     headBranch: pr.headBranch,
     state: pr.state,
   };
-}
-
-function terminalStatusFromThreadState(input: {
-  runningTerminalIds: string[];
-  terminalAttentionStatesById: Record<string, "attention" | "review">;
-}): TerminalStatusIndicator | null {
-  const terminalAttentionStates = Object.values(input.terminalAttentionStatesById ?? {});
-  if (terminalAttentionStates.includes("attention")) {
-    return {
-      label: "Terminal input needed",
-      colorClass: "text-amber-600 dark:text-amber-300/90",
-      pulse: false,
-    };
-  }
-  if ((input.runningTerminalIds?.length ?? 0) > 0) {
-    return {
-      label: "Terminal process running",
-      colorClass: "text-teal-600 dark:text-teal-300/90",
-      pulse: true,
-    };
-  }
-  if (terminalAttentionStates.includes("review")) {
-    return {
-      label: "Terminal task completed",
-      colorClass: "text-emerald-600 dark:text-emerald-300/90",
-      pulse: false,
-    };
-  }
-  return null;
-}
-
-function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
-  if (!pr) return null;
-
-  if (pr.state === "open") {
-    return {
-      label: "PR open",
-      // Match the diff "+" green so an opened PR reads as the same positive signal.
-      colorClass: "text-[var(--color-decoration-added)]",
-      icon: GitPullRequestIcon,
-      tooltip: `#${pr.number} PR open: ${pr.title}`,
-      url: pr.url,
-    };
-  }
-  if (pr.state === "closed") {
-    return {
-      label: "PR closed",
-      colorClass: "text-zinc-500 dark:text-zinc-400/80",
-      icon: GitPullRequestIcon,
-      tooltip: `#${pr.number} PR closed: ${pr.title}`,
-      url: pr.url,
-    };
-  }
-  if (pr.state === "merged") {
-    return {
-      label: "PR merged",
-      colorClass: "text-violet-500 dark:text-violet-400",
-      icon: GitMergedSimpleIcon,
-      tooltip: `#${pr.number} PR merged: ${pr.title}`,
-      url: pr.url,
-    };
-  }
-  return null;
-}
-
-function ThreadPrStatusBadge({
-  prStatus,
-  onOpen,
-  className,
-}: {
-  prStatus: PrStatusIndicator;
-  onOpen: (event: MouseEvent<HTMLElement>, prUrl: string) => void;
-  className?: string;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            aria-label={prStatus.tooltip}
-            className={cn(
-              "inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring",
-              prStatus.colorClass,
-              className,
-            )}
-            onClick={(event) => onOpen(event, prStatus.url)}
-          >
-            <SidebarGlyph icon={prStatus.icon} variant="meta" className="size-3.5" />
-          </button>
-        }
-      />
-      <TooltipPopup side="top">{prStatus.tooltip}</TooltipPopup>
-    </Tooltip>
-  );
 }
 
 type SortableProjectHandleProps = Pick<
@@ -1230,6 +795,12 @@ export default function Sidebar() {
   const renameProjectLocally = useStore((store) => store.renameProjectLocally);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
+  // Narrow per-routeThreadId subscription so the parent does not re-render when
+  // an unrelated thread's terminal state changes. selectThreadTerminalState
+  // returns identity-stable slices (direct map lookup or frozen DEFAULT).
+  const routeTerminalState = useTerminalStateStore((state) =>
+    routeThreadId ? selectThreadTerminalState(state.terminalStateByThreadId, routeThreadId) : null,
+  );
   const projectRunsByProjectId = useProjectRunStore((state) => state.runsByProjectId);
   const storeUpsertProjectRun = useProjectRunStore((state) => state.upsertRun);
   const storeRemoveProjectRun = useProjectRunStore((state) => state.removeRun);
@@ -1240,7 +811,6 @@ export default function Sidebar() {
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,
   );
-  const composerDraftsByThreadId = useComposerDraftStore((store) => store.draftsByThreadId);
   const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
   const temporaryThreadIds = useTemporaryThreadStore((store) => store.temporaryThreadIds);
   const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
@@ -1521,7 +1091,7 @@ export default function Sidebar() {
 
   const clearThreadNotification = useCallback(
     (threadId: ThreadId) => {
-      const thread = sidebarThreadSummaryById[threadId];
+      const thread = sidebarThreadSummaryByIdRef.current[threadId];
       if (!thread) {
         return;
       }
@@ -1535,16 +1105,8 @@ export default function Sidebar() {
       }
       dismissThreadStatus(threadId, threadStatus.dismissalKey);
     },
-    [
-      dismissThreadStatus,
-      markThreadVisited,
-      resolveThreadStatusForSidebar,
-      sidebarThreadSummaryById,
-    ],
+    [dismissThreadStatus, markThreadVisited, resolveThreadStatusForSidebar],
   );
-  const routeTerminalState = routeThreadId
-    ? selectThreadTerminalState(terminalStateByThreadId, routeThreadId)
-    : null;
   const terminalOpen = routeTerminalState?.terminalOpen ?? false;
   const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
     presentationMode: routeTerminalState?.presentationMode ?? "drawer",
@@ -2117,19 +1679,13 @@ export default function Sidebar() {
       sortThreadsForSidebar(sidebarThreads, appSettings.sidebarThreadSortOrder)[0] ?? null;
     return resolveSettingsBackTarget({
       lastThreadRoute,
-      availableThreadIds: new Set(Object.keys(sidebarThreadSummaryById)),
+      availableThreadIds: new Set(Object.keys(sidebarThreadSummaryByIdRef.current)),
       availableSplitViewIds: new Set(
         Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
       ),
       latestThreadId: latestThread?.id ?? null,
     });
-  }, [
-    appSettings.sidebarThreadSortOrder,
-    lastThreadRoute,
-    sidebarThreadSummaryById,
-    sidebarThreads,
-    splitViewsById,
-  ]);
+  }, [appSettings.sidebarThreadSortOrder, lastThreadRoute, sidebarThreads, splitViewsById]);
 
   const handleBackToAppFromSettings = useCallback(() => {
     const target = resolveBackToThreadTarget();
@@ -2875,7 +2431,7 @@ export default function Sidebar() {
   );
   const confirmAndDeleteThread = useCallback(
     async (threadId: ThreadId) => {
-      const thread = sidebarThreadSummaryById[threadId];
+      const thread = sidebarThreadSummaryByIdRef.current[threadId];
       if (!thread) return;
 
       if (appSettings.confirmThreadDelete) {
@@ -2892,7 +2448,7 @@ export default function Sidebar() {
 
       await deleteThread(threadId);
     },
-    [appSettings.confirmThreadDelete, deleteThread, sidebarThreadSummaryById],
+    [appSettings.confirmThreadDelete, deleteThread],
   );
 
   /**
@@ -2946,7 +2502,7 @@ export default function Sidebar() {
 
   const confirmAndArchiveThread = useCallback(
     async (threadId: ThreadId) => {
-      const thread = sidebarThreadSummaryById[threadId];
+      const thread = sidebarThreadSummaryByIdRef.current[threadId];
       if (!thread) return;
 
       if (appSettings.confirmThreadArchive) {
@@ -2964,7 +2520,7 @@ export default function Sidebar() {
       await archiveThread(threadId);
       setPendingArchiveConfirmationThreadId((current) => (current === threadId ? null : current));
     },
-    [appSettings.confirmThreadArchive, archiveThread, sidebarThreadSummaryById],
+    [appSettings.confirmThreadArchive, archiveThread],
   );
 
   const inlineConfirmArchiveThread = useCallback(
@@ -3217,7 +2773,7 @@ export default function Sidebar() {
       if (!api) return;
       const thread = getThreadFromState(useStore.getState(), threadId);
       if (!thread) return;
-      const threadSummary = sidebarThreadSummaryById[threadId];
+      const threadSummary = sidebarThreadSummaryByIdRef.current[threadId];
       const isPinned = pinnedThreadIdSet.has(threadId);
       const hasPendingApprovals =
         threadSummary?.hasPendingApprovals ?? derivePendingApprovals(thread.activities).length > 0;
@@ -3415,7 +2971,6 @@ export default function Sidebar() {
       pinnedThreadIdSet,
       projectCwdById,
       resolveThreadStatusForSidebar,
-      sidebarThreadSummaryById,
       toggleThreadPinned,
     ],
   );
@@ -3849,25 +3404,6 @@ export default function Sidebar() {
     }
     return byProjectId;
   }, [appSettings.sidebarThreadSortOrder, sidebarThreadsByProjectId]);
-  const resolveSplitPreview = useCallback(
-    (threadId: ThreadId | null): SidebarSplitPreview => {
-      const thread = threadId ? (sidebarThreadSummaryById[threadId] ?? null) : null;
-      const draftProvider =
-        threadId && composerDraftsByThreadId[threadId]?.activeProvider
-          ? composerDraftsByThreadId[threadId].activeProvider
-          : null;
-      return {
-        threadId,
-        title: resolveSplitPreviewTitle({
-          thread,
-          draftPrompt: threadId ? (composerDraftsByThreadId[threadId]?.prompt ?? null) : null,
-        }),
-        provider: thread?.modelSelection.provider ?? draftProvider ?? "codex",
-      };
-    },
-    [composerDraftsByThreadId, sidebarThreadSummaryById],
-  );
-
   const handleProjectTitlePointerDownCapture = useCallback(() => {
     suppressProjectClickAfterDragRef.current = false;
   }, []);
@@ -4501,672 +4037,115 @@ export default function Sidebar() {
   }, [activeSidebarThreadId, visibleSidebarThreadIds]);
 
   // Pinned rows should show the user-facing project label, not the raw folder basename.
-  function resolvePinnedThreadProjectLabel(projectId: ProjectId): string | null {
-    const project = projectById.get(projectId);
-    if (!project) return null;
-    return project.name ?? project.folderName ?? null;
-  }
-
-  // Keep hover actions in the same trailing slot used by the timestamp they replace.
-  function renderThreadArchiveAction(
-    threadId: ThreadId,
-    toneClassName: string,
-    options?: {
-      compact?: boolean;
+  const resolvePinnedThreadProjectLabel = useCallback(
+    (projectId: ProjectId): string | null => {
+      const project = projectById.get(projectId);
+      if (!project) return null;
+      return project.name ?? project.folderName ?? null;
     },
-  ) {
-    const compact = options?.compact === true;
-    const isPendingConfirmation = pendingArchiveConfirmationThreadId === threadId;
+    [projectById],
+  );
 
-    if (isPendingConfirmation) {
-      return (
-        <button
-          type="button"
-          aria-label="Confirm archive"
-          title="Confirm archive"
-          className={cn(
-            "pointer-events-auto inline-flex h-5 items-center rounded-full px-2.5 text-[10px] font-normal leading-none tracking-[-0.01em] opacity-100 transition-colors",
-            "bg-red-400/12 text-red-400 hover:bg-red-400/16 hover:text-red-300",
-            "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-red-400/45",
-            compact ? "h-4.5 px-1.5 text-[10px]" : undefined,
-          )}
-          onMouseDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            void inlineConfirmArchiveThread(threadId);
-          }}
-        >
-          <span>Confirm</span>
-        </button>
-      );
-    }
+  // Stable callback objects passed to memoized row components.
+  // These are assembled inline; since all referenced callbacks are already stable
+  // (useCallback), the object shape is stable enough for memo's shallow comparison
+  // via the `callbacks` prop key — rows only re-render when their own data changes.
+  const pinnedThreadRowCallbacks = useMemo<PinnedThreadRowCallbacks>(
+    () => ({
+      activateThreadFromSidebarIntent,
+      primeThreadActivation,
+      openRenameThreadDialog,
+      handleThreadRenamePointerUp,
+      handleThreadContextMenu,
+      openPrLink,
+      toggleThreadPinned,
+      inlineConfirmArchiveThread,
+      dismissPendingArchiveConfirmation,
+      setPendingArchiveConfirmationThreadId,
+      resolvePinnedThreadProjectLabel,
+      resolveThreadStatusForSidebar,
+    }),
+    [
+      activateThreadFromSidebarIntent,
+      primeThreadActivation,
+      openRenameThreadDialog,
+      handleThreadRenamePointerUp,
+      handleThreadContextMenu,
+      openPrLink,
+      toggleThreadPinned,
+      inlineConfirmArchiveThread,
+      dismissPendingArchiveConfirmation,
+      setPendingArchiveConfirmationThreadId,
+      resolvePinnedThreadProjectLabel,
+      resolveThreadStatusForSidebar,
+    ],
+  );
 
-    return (
-      <SidebarIconButton
-        icon={HiOutlineArchiveBox}
-        label="Archive thread"
-        title="Archive thread"
-        data-testid={`thread-archive-${threadId}`}
-        size={compact ? "sm" : "md"}
-        glyph={compact ? "compact" : "meta"}
-        className={cn("hover:text-foreground/89", toneClassName)}
-        onMouseDown={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        }}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          setPendingArchiveConfirmationThreadId(threadId);
-        }}
-      />
-    );
-  }
-
-  function renderThreadHoverActions(input: {
-    threadId: ThreadId;
-    toneClassName: string;
-    isPinned: boolean;
-    includePinToggle?: boolean;
-    compact?: boolean;
-  }) {
-    const compact = input.compact === true;
-    const includePinToggle = input.includePinToggle !== false;
-    const isPendingConfirmation = pendingArchiveConfirmationThreadId === input.threadId;
-
-    return (
-      <SidebarRowHoverActions threadId={input.threadId} pinnedVisible={isPendingConfirmation}>
-        {isPendingConfirmation ? (
-          <button
-            type="button"
-            aria-label="Confirm archive"
-            title="Confirm archive"
-            className={cn(
-              "pointer-events-auto inline-flex h-5 items-center rounded-full px-2.5 text-[10px] font-normal leading-none tracking-[-0.01em] opacity-100 transition-colors",
-              "bg-red-400/12 text-red-400 hover:bg-red-400/16 hover:text-red-300",
-              "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-red-400/45",
-              compact ? "h-4.5 px-1.5 text-[10px]" : undefined,
-            )}
-            onMouseDown={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-            }}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              void inlineConfirmArchiveThread(input.threadId);
-            }}
-          >
-            <span>Confirm</span>
-          </button>
-        ) : (
-          <div className="pointer-events-auto inline-flex items-center gap-1">
-            {includePinToggle ? (
-              <ThreadPinToggleButton
-                pinned={input.isPinned}
-                presentation="inline"
-                toneClassName={input.toneClassName}
-                onToggle={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  toggleThreadPinned(input.threadId);
-                }}
-              />
-            ) : null}
-            {renderThreadArchiveAction(input.threadId, input.toneClassName, {
-              compact,
-            })}
-          </div>
-        )}
-      </SidebarRowHoverActions>
-    );
-  }
-
-  function renderThreadRowTrailingCluster(input: {
-    isSubagentThread: boolean;
-    isPendingArchiveConfirmation: boolean;
-    threadJumpLabel: string | null;
-    threadJumpLabelParts: readonly string[];
-    rightMetaChips: ThreadMetaChip[];
-    threadStatus: ReturnType<typeof resolveThreadStatusForSidebar>;
-    updatedAt: string | null | undefined;
-    createdAt: string;
-    timestampToneClassName?: string;
-    hoverActions: ReactNode;
-  }) {
-    return (
-      <div className="relative flex shrink-0 items-center justify-end gap-1">
-        {!input.isPendingArchiveConfirmation && input.rightMetaChips.length > 0 ? (
-          <div className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
-            <SidebarMetaChipStack chips={input.rightMetaChips} />
-          </div>
-        ) : null}
-        {!input.isPendingArchiveConfirmation && input.threadJumpLabel ? (
-          <KbdGroup className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
-            {input.threadJumpLabelParts.map((part) => (
-              <Kbd key={part}>{part}</Kbd>
-            ))}
-          </KbdGroup>
-        ) : null}
-        {!input.isPendingArchiveConfirmation && !input.threadJumpLabel ? (
-          input.threadStatus ? (
-            <span
-              className={threadRowTimestampSlotClassName(
-                input.isSubagentThread,
-                input.timestampToneClassName,
-              )}
-            >
-              <ThreadStatusTrailingGlyph threadStatus={input.threadStatus} />
-            </span>
-          ) : (
-            <span
-              className={threadRowTimestampSlotClassName(
-                input.isSubagentThread,
-                input.timestampToneClassName,
-              )}
-            >
-              {formatRelativeTime(input.updatedAt ?? input.createdAt)}
-            </span>
-          )
-        ) : null}
-        {input.hoverActions}
-      </div>
-    );
-  }
-
-  function renderPinnedThreadRow(thread: SidebarThreadSummary) {
-    const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
-    const threadEntryPoint = threadTerminalState.entryPoint;
-    const terminalStatus = terminalStatusFromThreadState({
-      runningTerminalIds: threadTerminalState.runningTerminalIds,
-      terminalAttentionStatesById: threadTerminalState.terminalAttentionStatesById,
-    });
-    const terminalCount = threadTerminalState.terminalIds.length;
-    const isPendingArchiveConfirmation = pendingArchiveConfirmationThreadId === thread.id;
-    const isActive = visualActiveSidebarThreadId === thread.id;
-    const projectLabel = resolvePinnedThreadProjectLabel(thread.projectId);
-    const rightMetaChips = resolveThreadRowMetaChips({
-      thread,
-      includeHandoffBadge: true,
-      handoffShownInAvatar:
-        threadEntryPoint !== "terminal" &&
-        !isGenericChatThreadTitle(thread.title) &&
-        Boolean(thread.handoff?.sourceProvider),
-    });
-    const threadStatus = resolveThreadStatusForSidebar(thread);
-    const isSubagentThread = Boolean(thread.parentThreadId);
-    const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
-    const leadingPrStatus =
-      isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
-        ? null
-        : prStatus;
-    const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
-    const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
-    const threadJumpLabelParts =
-      visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
-    const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
-    const showThreadIdentityGlyph = threadEntryPoint === "terminal" || showThreadProviderAvatar;
-    const secondaryMetaClass = isActive
-      ? "text-foreground/54 dark:text-foreground/64"
-      : "text-muted-foreground/38";
-    return (
-      <div
-        key={thread.id}
-        className="group/thread-row relative w-full opacity-85"
-        onPointerLeave={() => dismissPendingArchiveConfirmation(thread.id)}
-      >
-        {leadingPrStatus ? (
-          <ThreadPrStatusBadge
-            prStatus={leadingPrStatus}
-            onOpen={openPrLink}
-            className="pointer-events-auto absolute left-1.5 top-1/2 z-30 size-5 -translate-y-1/2"
-          />
-        ) : null}
-        <div
-          role="button"
-          tabIndex={0}
-          data-thread-item
-          className={cn(
-            SIDEBAR_HEADER_ROW_CLASS_NAME,
-            "grid w-full items-center gap-x-1.5 transition-colors",
-            leadingPrStatus && "pl-8",
-            showThreadIdentityGlyph
-              ? "grid-cols-[auto_minmax(0,1fr)_auto_3.5rem]"
-              : "grid-cols-[minmax(0,1fr)_auto_3.5rem]",
-            isActive
-              ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
-              : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
-          )}
-          onPointerDown={(event) => primeThreadActivation(event, thread.id)}
-          onClick={() => activateThreadFromSidebarIntent(thread.id)}
-          onDoubleClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            openRenameThreadDialog(thread.id);
-          }}
-          onPointerUp={(event) => handleThreadRenamePointerUp(event, thread.id)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              activateThreadFromSidebarIntent(thread.id);
-            }
-          }}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            void handleThreadContextMenu(thread.id, {
-              x: event.clientX,
-              y: event.clientY,
-            });
-          }}
-        >
-          {threadEntryPoint === "terminal" ? (
-            <SidebarGlyph
-              icon={TerminalIcon}
-              variant="chrome"
-              className="text-[var(--color-text-accent)]"
-            />
-          ) : showThreadProviderAvatar ? (
-            <ProviderAvatarWithTerminal
-              provider={thread.session?.provider ?? thread.modelSelection.provider}
-              handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
-              handoffTooltip={handoffBadgeLabel}
-              terminalStatus={terminalStatus}
-              terminalCount={terminalCount}
-            />
-          ) : null}
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span
-                    className="min-w-0 flex-1 truncate"
-                    data-testid={`thread-title-${thread.id}`}
-                  >
-                    {isSubagentThread ? (
-                      <SidebarSubagentLabel
-                        threadId={thread.id}
-                        parentThreadId={thread.parentThreadId}
-                        agentId={thread.subagentAgentId}
-                        nickname={thread.subagentNickname}
-                        role={thread.subagentRole}
-                        title={thread.title}
-                      />
-                    ) : (
-                      thread.title
-                    )}
-                  </span>
-                }
-              />
-              <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
-                {thread.title}
-              </TooltipPopup>
-            </Tooltip>
-            {!isSubagentThread && threadStatus?.label === "Pending Approval" ? (
-              <span
-                aria-label="Pending approval"
-                className={cn("shrink-0 text-[10px] font-medium", threadStatus.colorClass)}
-              >
-                Pending
-              </span>
-            ) : null}
-          </div>
-          {/* Keep pinned rows on stable columns even when badges/timestamps differ. */}
-          <div className="flex min-w-0 max-w-[3rem] shrink items-center justify-end">
-            {projectLabel ? (
-              <span className="truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38">
-                {projectLabel}
-              </span>
-            ) : null}
-          </div>
-          <div className="flex w-14 shrink-0 items-center justify-end">
-            {renderThreadRowTrailingCluster({
-              isSubagentThread,
-              isPendingArchiveConfirmation,
-              threadJumpLabel,
-              threadJumpLabelParts,
-              rightMetaChips,
-              threadStatus,
-              updatedAt: thread.updatedAt,
-              createdAt: thread.createdAt,
-              timestampToneClassName: "text-muted-foreground/38",
-              hoverActions: renderThreadHoverActions({
-                threadId: thread.id,
-                toneClassName: "text-muted-foreground/42",
-                isPinned: true,
-                compact: isSubagentThread,
-              }),
-            })}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function renderThreadRow(
-    thread: SidebarThreadSummary,
-    orderedProjectThreadIds: readonly ThreadId[],
-    depth = 0,
-    childCount = 0,
-    isExpanded = false,
-  ) {
-    const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
-    const threadEntryPoint = threadTerminalState.entryPoint;
-    const isPendingArchiveConfirmation = pendingArchiveConfirmationThreadId === thread.id;
-    const isActive = visualActiveSidebarThreadId === thread.id;
-    const isPinned = pinnedThreadIdSet.has(thread.id);
-    const isSelected = selectedThreadIds.has(thread.id);
-    const isHighlighted = isActive || isSelected;
-    const threadStatus = resolveThreadStatusForSidebar(thread);
-    const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
-    const terminalStatus = terminalStatusFromThreadState({
-      runningTerminalIds: threadTerminalState.runningTerminalIds,
-      terminalAttentionStatesById: threadTerminalState.terminalAttentionStatesById,
-    });
-    const terminalCount = threadTerminalState.terminalIds.length;
-    const isDisposableThread =
-      temporaryThreadIds[thread.id] === true ||
-      draftThreadsByThreadId[thread.id]?.isTemporary === true;
-    const secondaryMetaClass = isHighlighted
-      ? "text-foreground/54 dark:text-foreground/64"
-      : "text-muted-foreground/34";
-    const rightMetaChips = resolveThreadRowMetaChips({
-      thread,
-      includeHandoffBadge: !isDisposableThread,
-      handoffShownInAvatar:
-        threadEntryPoint !== "terminal" &&
-        !isGenericChatThreadTitle(thread.title) &&
-        Boolean(thread.handoff?.sourceProvider),
-    });
-    const isSubagentThread = Boolean(thread.parentThreadId);
-    const leadingPrStatus =
-      isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
-        ? null
-        : prStatus;
-    const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
-    const subagentPresentation = isSubagentThread
-      ? resolveSubagentPresentationForThread({
-          thread: {
-            id: thread.id,
-            parentThreadId: thread.parentThreadId,
-            subagentAgentId: thread.subagentAgentId,
-            subagentNickname: thread.subagentNickname,
-            subagentRole: thread.subagentRole,
-            title: thread.title,
-          },
-        })
-      : null;
-    const canToggleSubagents = childCount > 0;
-    const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
-    const showCompactMeta = !isSubagentThread;
-    const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
-    const threadJumpLabelParts =
-      visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
-    // Untouched draft chat threads are intentionally text-only until they get a real title.
-    const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
-    const childCountLabel = `${childCount} ${pluralize(childCount, "subagent")}`;
-    const toggleButtonClassName = isHighlighted
-      ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
-      : "border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] hover:border-[color:var(--color-border)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";
-
-    return (
-      <SidebarMenuSubItem
-        key={thread.id}
-        className="group/thread-row w-full opacity-85"
-        data-thread-item
-        onPointerLeave={() => dismissPendingArchiveConfirmation(thread.id)}
-      >
-        {leadingPrStatus ? (
-          <ThreadPrStatusBadge
-            prStatus={leadingPrStatus}
-            onOpen={openPrLink}
-            className="pointer-events-auto absolute left-1.5 top-1/2 z-30 size-5 -translate-y-1/2"
-          />
-        ) : null}
-        <SidebarMenuSubButton
-          render={<div role="button" tabIndex={0} />}
-          data-thread-entry-point={threadEntryPoint}
-          size="sm"
-          isActive={isActive}
-          className={cn(
-            resolveThreadRowClassName({
-              isActive,
-              isSelected,
-            }),
-            leadingPrStatus && "pl-8",
-            isSubagentThread
-              ? "pr-7.5"
-              : resolveThreadRowTrailingReserveClass(showCompactMeta ? rightMetaChips.length : 0),
-          )}
-          draggable={renamingThreadId !== thread.id}
-          onDragStart={(event) => {
-            const dragImage = event.currentTarget as HTMLElement | null;
-            event.dataTransfer.effectAllowed = "move";
-            event.dataTransfer.setData(THREAD_DRAG_MIME, JSON.stringify({ threadId: thread.id }));
-            if (dragImage) {
-              const rect = dragImage.getBoundingClientRect();
-              event.dataTransfer.setDragImage(
-                dragImage,
-                Math.max(0, event.clientX - rect.left),
-                Math.max(0, event.clientY - rect.top),
-              );
-            }
-          }}
-          onClick={(event) => {
-            handleThreadClick(event, thread.id, orderedProjectThreadIds, {
-              isActive,
-              canToggleSubagents,
-            });
-          }}
-          onPointerDown={(event) => primeThreadActivation(event, thread.id)}
-          onDoubleClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            openRenameThreadDialog(thread.id);
-          }}
-          onPointerUp={(event) => handleThreadRenamePointerUp(event, thread.id)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            activateThreadFromSidebarIntent(thread.id);
-          }}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            if (selectedThreadIds.size > 0 && selectedThreadIds.has(thread.id)) {
-              void handleMultiSelectContextMenu({
-                x: event.clientX,
-                y: event.clientY,
-              });
-            } else {
-              if (selectedThreadIds.size > 0) {
-                clearSelection();
-              }
-              void handleThreadContextMenu(thread.id, {
-                x: event.clientX,
-                y: event.clientY,
-              });
-            }
-          }}
-        >
-          {isSubagentThread ? (
-            <span
-              aria-hidden="true"
-              className="relative inline-flex h-3.5 w-[18px] shrink-0 items-center"
-              style={{ marginLeft: `${subagentIndentPx}px` }}
-            >
-              <span className="absolute left-1.5 top-0 bottom-0 w-px rounded-full bg-border/35" />
-              <span className="absolute left-1.5 top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/35" />
-              <span
-                className="absolute left-1.5 top-1/2 size-[5px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-                style={{ backgroundColor: subagentPresentation?.accentColor }}
-              />
-            </span>
-          ) : threadEntryPoint === "terminal" ? (
-            <SidebarGlyph
-              icon={TerminalIcon}
-              variant="chrome"
-              className="text-[var(--color-text-accent)]"
-            />
-          ) : showThreadProviderAvatar ? (
-            <ProviderAvatarWithTerminal
-              provider={thread.session?.provider ?? thread.modelSelection.provider}
-              handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
-              handoffTooltip={handoffBadgeLabel}
-              terminalStatus={terminalStatus}
-              terminalCount={terminalCount}
-            />
-          ) : null}
-          <div
-            className={cn(
-              "flex min-w-0 flex-1 items-center text-left",
-              isSubagentThread ? "gap-[5px]" : "gap-1.5",
-            )}
-          >
-            {renamingThreadId === thread.id ? (
-              <input
-                ref={(el) => {
-                  if (el && renamingInputRef.current !== el) {
-                    renamingInputRef.current = el;
-                    el.focus();
-                    el.select();
-                  }
-                }}
-                className="min-w-0 flex-1 truncate rounded-md border border-ring bg-transparent px-1.5 py-0.5 text-[length:var(--app-font-size-ui,12px)] outline-none"
-                value={renamingTitle}
-                onChange={(e) => setRenamingTitle(e.target.value)}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    renamingCommittedRef.current = true;
-                    void commitRename(thread.id, renamingTitle, thread.title);
-                  } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    renamingCommittedRef.current = true;
-                    cancelRename();
-                  }
-                }}
-                onBlur={() => {
-                  if (!renamingCommittedRef.current) {
-                    void commitRename(thread.id, renamingTitle, thread.title);
-                  }
-                }}
-                onClick={(e) => e.stopPropagation()}
-              />
-            ) : (
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)]",
-                  // Inactive thread names sit at 92% foreground so they read
-                  // clearly without competing with the active row, which still
-                  // pops via the row background and full-foreground color from
-                  // resolveThreadRowClassName.
-                  isActive ? "text-foreground" : "text-foreground/92",
-                  isSubagentThread ? "leading-[18px] text-foreground/80" : "leading-5",
-                )}
-              >
-                {isSubagentThread ? (
-                  <SidebarSubagentLabel
-                    threadId={thread.id}
-                    parentThreadId={thread.parentThreadId}
-                    agentId={thread.subagentAgentId}
-                    nickname={thread.subagentNickname}
-                    role={thread.subagentRole}
-                    title={thread.title}
-                    roleClassName="text-muted-foreground/42"
-                  />
-                ) : (
-                  thread.title
-                )}
-              </span>
-            )}
-            {!isSubagentThread && threadStatus?.label === "Pending Approval" ? (
-              <span
-                aria-label="Pending approval"
-                className={cn("shrink-0 text-[10px] font-medium", threadStatus.colorClass)}
-              >
-                Pending
-              </span>
-            ) : null}
-          </div>
-          <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
-            {canToggleSubagents ? (
-              <button
-                type="button"
-                data-thread-selection-safe
-                aria-label={`${isExpanded ? "Collapse" : "Expand"} ${childCountLabel}`}
-                title={childCountLabel}
-                className={cn(
-                  "inline-flex h-5 min-w-5 items-center justify-center gap-0.5 rounded-full border px-[5px] transition-colors",
-                  toggleButtonClassName,
-                )}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  toggleSubagentParent(thread.id);
-                }}
-              >
-                <span className="text-[9px] font-medium leading-none tabular-nums">
-                  {childCount}
-                </span>
-                {isExpanded ? (
-                  <SidebarGlyph icon={ChevronDownIcon} variant="chevron" />
-                ) : (
-                  <SidebarGlyph icon={ChevronRightIcon} variant="chevron" />
-                )}
-              </button>
-            ) : null}
-            {showCompactMeta && isDisposableThread && !thread.sidechatSourceThreadId ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
-                      <DisposableThreadIcon />
-                    </span>
-                  }
-                />
-                <TooltipPopup side="top">Disposable chat</TooltipPopup>
-              </Tooltip>
-            ) : null}
-          </div>
-          <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
-            {renderThreadRowTrailingCluster({
-              isSubagentThread,
-              isPendingArchiveConfirmation,
-              threadJumpLabel,
-              threadJumpLabelParts,
-              rightMetaChips: showCompactMeta ? rightMetaChips : [],
-              threadStatus,
-              updatedAt: thread.updatedAt,
-              createdAt: thread.createdAt,
-              timestampToneClassName: isSubagentThread
-                ? isHighlighted
-                  ? "text-foreground/38 dark:text-foreground/46"
-                  : "text-muted-foreground/24"
-                : secondaryMetaClass,
-              hoverActions: renderThreadHoverActions({
-                threadId: thread.id,
-                toneClassName: secondaryMetaClass,
-                isPinned,
-                compact: isSubagentThread,
-              }),
-            })}
-          </div>
-        </SidebarMenuSubButton>
-      </SidebarMenuSubItem>
-    );
-  }
+  const threadRowCallbacks = useMemo<ThreadRowCallbacks>(
+    () => ({
+      activateThreadFromSidebarIntent,
+      primeThreadActivation,
+      openRenameThreadDialog,
+      handleThreadRenamePointerUp,
+      handleThreadClick,
+      handleThreadContextMenu,
+      handleMultiSelectContextMenu,
+      openPrLink,
+      toggleThreadPinned,
+      toggleSubagentParent,
+      inlineConfirmArchiveThread,
+      dismissPendingArchiveConfirmation,
+      setPendingArchiveConfirmationThreadId,
+      clearSelection,
+      commitRename,
+      cancelRename,
+      resolveThreadStatusForSidebar,
+    }),
+    [
+      activateThreadFromSidebarIntent,
+      primeThreadActivation,
+      openRenameThreadDialog,
+      handleThreadRenamePointerUp,
+      handleThreadClick,
+      handleThreadContextMenu,
+      handleMultiSelectContextMenu,
+      openPrLink,
+      toggleThreadPinned,
+      toggleSubagentParent,
+      inlineConfirmArchiveThread,
+      dismissPendingArchiveConfirmation,
+      clearSelection,
+      commitRename,
+      cancelRename,
+      resolveThreadStatusForSidebar,
+    ],
+  );
 
   function renderChatItem(row: (typeof visibleChatThreadRows)[number]) {
-    return renderThreadRow(
-      row.thread,
-      visibleChatThreadIds,
-      row.depth,
-      row.childCount,
-      row.isExpanded,
+    return (
+      <SidebarThreadRow
+        key={row.thread.id}
+        thread={row.thread}
+        orderedProjectThreadIds={visibleChatThreadIds}
+        depth={row.depth}
+        childCount={row.childCount}
+        isExpanded={row.isExpanded}
+        prByThreadId={prByThreadId}
+        visualActiveSidebarThreadId={visualActiveSidebarThreadId}
+        pendingArchiveConfirmationThreadId={pendingArchiveConfirmationThreadId}
+        renamingThreadId={renamingThreadId}
+        renamingTitle={renamingTitle}
+        onRenamingTitleChange={setRenamingTitle}
+        renamingInputRef={renamingInputRef}
+        renamingCommittedRef={renamingCommittedRef}
+        pinnedThreadIdSet={pinnedThreadIdSet}
+        selectedThreadIds={selectedThreadIds}
+        temporaryThreadIds={temporaryThreadIds}
+        draftThreadsByThreadId={draftThreadsByThreadId}
+        visibleThreadJumpLabelByThreadId={visibleThreadJumpLabelByThreadId}
+        visibleThreadJumpLabelPartsByThreadId={visibleThreadJumpLabelPartsByThreadId}
+        callbacks={threadRowCallbacks}
+      />
     );
   }
 
@@ -5400,15 +4379,31 @@ export default function Sidebar() {
                 disclosureContentClassName(project.expanded),
               )}
             >
-              {visibleEntries.map((entry) =>
-                renderThreadRow(
-                  entry.thread,
-                  orderedProjectThreadIds,
-                  entry.depth,
-                  entry.childCount,
-                  entry.isExpanded,
-                ),
-              )}
+              {visibleEntries.map((entry) => (
+                <SidebarThreadRow
+                  key={entry.thread.id}
+                  thread={entry.thread}
+                  orderedProjectThreadIds={orderedProjectThreadIds}
+                  depth={entry.depth}
+                  childCount={entry.childCount}
+                  isExpanded={entry.isExpanded}
+                  prByThreadId={prByThreadId}
+                  visualActiveSidebarThreadId={visualActiveSidebarThreadId}
+                  pendingArchiveConfirmationThreadId={pendingArchiveConfirmationThreadId}
+                  renamingThreadId={renamingThreadId}
+                  renamingTitle={renamingTitle}
+                  onRenamingTitleChange={setRenamingTitle}
+                  renamingInputRef={renamingInputRef}
+                  renamingCommittedRef={renamingCommittedRef}
+                  pinnedThreadIdSet={pinnedThreadIdSet}
+                  selectedThreadIds={selectedThreadIds}
+                  temporaryThreadIds={temporaryThreadIds}
+                  draftThreadsByThreadId={draftThreadsByThreadId}
+                  visibleThreadJumpLabelByThreadId={visibleThreadJumpLabelByThreadId}
+                  visibleThreadJumpLabelPartsByThreadId={visibleThreadJumpLabelPartsByThreadId}
+                  callbacks={threadRowCallbacks}
+                />
+              ))}
 
               {hasHiddenThreads && !isThreadListExpanded && (
                 <SidebarMenuSubItem className="w-full">
@@ -6347,7 +5342,20 @@ export default function Sidebar() {
                       <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Pinned</span>
                     </div>
                     <div className="flex flex-col gap-0.5">
-                      {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
+                      {pinnedThreads.map((thread) => (
+                        <SidebarPinnedThreadRow
+                          key={thread.id}
+                          threadId={thread.id}
+                          prByThreadId={prByThreadId}
+                          visualActiveSidebarThreadId={visualActiveSidebarThreadId}
+                          pendingArchiveConfirmationThreadId={pendingArchiveConfirmationThreadId}
+                          visibleThreadJumpLabelByThreadId={visibleThreadJumpLabelByThreadId}
+                          visibleThreadJumpLabelPartsByThreadId={
+                            visibleThreadJumpLabelPartsByThreadId
+                          }
+                          callbacks={pinnedThreadRowCallbacks}
+                        />
+                      ))}
                     </div>
                   </div>
                 ) : null}

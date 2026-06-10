@@ -542,6 +542,7 @@ const verifyStagedNodePty = Effect.fn("verifyStagedNodePty")(function* (
 const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
+  arch: typeof BuildArch.Type,
   productName: string,
   signed: boolean,
   mockUpdates: boolean,
@@ -574,6 +575,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const platformBuildConfigInput = {
     platform,
     target,
+    arch,
     hasMacIconComposer,
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
@@ -771,6 +773,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     build: yield* createBuildConfig(
       options.platform,
       options.target,
+      options.arch,
       desktopPackageJson.productName ?? "Synara",
       options.signed,
       options.mockUpdates,

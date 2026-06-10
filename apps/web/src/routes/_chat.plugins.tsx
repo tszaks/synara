@@ -1,11 +1,8 @@
 // FILE: _chat.plugins.tsx
-// Purpose: Registers the plugin and skill browser under the shared chat shell.
-// Layer: Route
-// Exports: Route
+// Purpose: Route definition stub for /plugins — component is in _chat.plugins.lazy.tsx.
+// Layer: Route definition
+// Exports: Plugins route for `/plugins`
 
 import { createFileRoute } from "@tanstack/react-router";
-import { PluginLibrary } from "~/components/PluginLibrary";
 
-export const Route = createFileRoute("/_chat/plugins")({
-  component: PluginLibrary,
-});
+export const Route = createFileRoute("/_chat/plugins")({});

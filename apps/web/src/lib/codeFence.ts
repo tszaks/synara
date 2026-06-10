@@ -3,15 +3,21 @@
 //          optional file-reference metadata (Cursor-style `startLine:endLine:path`).
 // Layer: web chat markdown helper
 // Exports: parseCodeFenceInfo, type CodeFenceInfo
-// Depends on: @pierre/diffs filename→language map (shared with the diff renderer)
-//             and the shared path basename helper (file-icons).
+// Depends on: the shared path basename helper (file-icons). Deliberately free of
+//             @pierre/diffs: file-reference language resolution happens in the lazy
+//             ShikiCodeBlock module so this file stays in the eager markdown path
+//             without pulling the vendor-diffs chunk.
 
-import { getFiletypeFromFileName } from "@pierre/diffs";
 import { basenameOfPath } from "../file-icons";
 
 export interface CodeFenceInfo {
-  /** Highlighter language id (a valid Shiki language/alias, falling back to "text"). */
-  readonly language: string;
+  /**
+   * Highlighter language id (a valid Shiki language/alias, falling back to "text").
+   * Null for file references: their language derives from `fileName` via the diff
+   * renderer's filename→language map inside the lazy-loaded ShikiCodeBlock, so chat
+   * code references and diff views still resolve languages identically.
+   */
+  readonly language: string | null;
   /** True when the fence info encodes a file reference rather than a bare language. */
   readonly isFileReference: boolean;
   /** Full file path when this fence references a file, else null. */
@@ -33,9 +39,7 @@ function directoryFromPath(filePath: string, fileName: string): string | null {
 function fileReferenceInfo(filePath: string, lineRange: string | null): CodeFenceInfo {
   const fileName = basenameOfPath(filePath);
   return {
-    // Reuse the diff renderer's filename→language map so chat code references and
-    // diff views resolve languages identically; unknown extensions yield "text".
-    language: getFiletypeFromFileName(fileName),
+    language: null,
     isFileReference: true,
     filePath,
     fileName,
@@ -66,9 +70,9 @@ export function dedentCode(code: string): string {
 const CODE_REFERENCE_REGEX = /^(\d+):(\d+):(.+)$/;
 
 // Parses a fence info string. Recognizes Cursor-style file references
-// (`startLine:endLine:path`) and bare file paths, deriving the highlighter
-// language from the file extension. Everything else is treated as a plain
-// language token (preserving the legacy `gitignore` → `ini` alias).
+// (`startLine:endLine:path`) and bare file paths, deferring highlighter language
+// resolution to the file name. Everything else is treated as a plain language
+// token (preserving the legacy `gitignore` → `ini` alias).
 export function parseCodeFenceInfo(rawInfo: string): CodeFenceInfo {
   const info = rawInfo.trim();
 

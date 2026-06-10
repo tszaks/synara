@@ -222,21 +222,19 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     model: OrchestrationReadModel,
     thread: OrchestrationReadModel["threads"][number],
   ): OrchestrationReadModel => {
-    const existingThread = model.threads.find((entry) => entry.id === thread.id);
+    // Build a Map for O(1) lookup and in-place update (preserves insertion order).
+    const threadsMap = new Map<typeof thread.id, (typeof model.threads)[number]>();
+    for (const entry of model.threads) {
+      threadsMap.set(entry.id, entry);
+    }
+    const existingThread = threadsMap.get(thread.id);
     const mergedThread =
       existingThread && existingThread.messages.length > 0
-        ? {
-            ...thread,
-            messages: existingThread.messages,
-          }
+        ? { ...thread, messages: existingThread.messages }
         : thread;
-    const hasThread = existingThread !== undefined;
-    return {
-      ...model,
-      threads: hasThread
-        ? model.threads.map((entry) => (entry.id === thread.id ? mergedThread : entry))
-        : [...model.threads, mergedThread],
-    };
+    // Map.set on an existing key preserves insertion order; on a new key it appends.
+    threadsMap.set(thread.id, mergedThread);
+    return { ...model, threads: Array.from(threadsMap.values()) };
   };
 
   const loadThreadDetailForDecider = (

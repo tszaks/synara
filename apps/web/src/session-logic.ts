@@ -267,10 +267,15 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
 export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingApproval[] {
-  const openByRequestId = new Map<ApprovalRequestId, PendingApproval>();
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  return derivePendingApprovalsFromSorted(sortActivitiesByOrder(activities));
+}
 
-  for (const activity of ordered) {
+export function derivePendingApprovalsFromSorted(
+  sortedActivities: ReadonlyArray<OrchestrationThreadActivity>,
+): PendingApproval[] {
+  const openByRequestId = new Map<ApprovalRequestId, PendingApproval>();
+
+  for (const activity of sortedActivities) {
     const payload =
       activity.payload && typeof activity.payload === "object"
         ? (activity.payload as Record<string, unknown>)
@@ -373,10 +378,15 @@ function parseUserInputQuestions(
 export function derivePendingUserInputs(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingUserInput[] {
-  const openByRequestId = new Map<ApprovalRequestId, PendingUserInput>();
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  return derivePendingUserInputsFromSorted(sortActivitiesByOrder(activities));
+}
 
-  for (const activity of ordered) {
+export function derivePendingUserInputsFromSorted(
+  sortedActivities: ReadonlyArray<OrchestrationThreadActivity>,
+): PendingUserInput[] {
+  const openByRequestId = new Map<ApprovalRequestId, PendingUserInput>();
+
+  for (const activity of sortedActivities) {
     const payload =
       activity.payload && typeof activity.payload === "object"
         ? (activity.payload as Record<string, unknown>)
@@ -467,7 +477,14 @@ export function deriveActiveTaskListState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
 ): ActiveTaskListState | null {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  return deriveActiveTaskListStateFromSorted(sortActivitiesByOrder(activities), latestTurnId);
+}
+
+export function deriveActiveTaskListStateFromSorted(
+  sortedActivities: ReadonlyArray<OrchestrationThreadActivity>,
+  latestTurnId: TurnId | undefined,
+): ActiveTaskListState | null {
+  const ordered = sortedActivities;
   const allTaskListActivities = ordered.filter(
     (activity) => activity.kind === "turn.tasks.updated",
   );
@@ -516,10 +533,19 @@ export function deriveActiveBackgroundTasksState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
 ): ActiveBackgroundTasksState | null {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  return deriveActiveBackgroundTasksStateFromSorted(
+    sortActivitiesByOrder(activities),
+    latestTurnId,
+  );
+}
+
+export function deriveActiveBackgroundTasksStateFromSorted(
+  sortedActivities: ReadonlyArray<OrchestrationThreadActivity>,
+  latestTurnId: TurnId | undefined,
+): ActiveBackgroundTasksState | null {
   const activeTasks = new Map<string, { taskType?: string | undefined }>();
 
-  for (const activity of ordered) {
+  for (const activity of sortedActivities) {
     if (
       latestTurnId &&
       activity.turnId &&
@@ -569,6 +595,19 @@ export function hasLiveTurnTailWork(input: {
   messages: ReadonlyArray<Pick<ChatMessage, "role" | "streaming" | "turnId">>;
   activities: ReadonlyArray<OrchestrationThreadActivity>;
   session?: Pick<ThreadSession, "orchestrationStatus"> | null;
+}): boolean;
+export function hasLiveTurnTailWork(input: {
+  latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "completedAt"> | null;
+  messages: ReadonlyArray<Pick<ChatMessage, "role" | "streaming" | "turnId">>;
+  sortedActivities: ReadonlyArray<OrchestrationThreadActivity>;
+  session?: Pick<ThreadSession, "orchestrationStatus"> | null;
+}): boolean;
+export function hasLiveTurnTailWork(input: {
+  latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "completedAt"> | null;
+  messages: ReadonlyArray<Pick<ChatMessage, "role" | "streaming" | "turnId">>;
+  activities?: ReadonlyArray<OrchestrationThreadActivity>;
+  sortedActivities?: ReadonlyArray<OrchestrationThreadActivity>;
+  session?: Pick<ThreadSession, "orchestrationStatus"> | null;
 }): boolean {
   const latestTurnId = input.latestTurn?.turnId;
   if (!latestTurnId) {
@@ -592,7 +631,8 @@ export function hasLiveTurnTailWork(input: {
     return false;
   }
 
-  if (deriveActiveBackgroundTasksState(input.activities, latestTurnId) !== null) {
+  const sorted = input.sortedActivities ?? sortActivitiesByOrder(input.activities ?? []);
+  if (deriveActiveBackgroundTasksStateFromSorted(sorted, latestTurnId) !== null) {
     return true;
   }
 
@@ -673,8 +713,14 @@ export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
 ): WorkLogEntry[] {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
-  const entries = ordered
+  return deriveWorkLogEntriesFromSorted(sortActivitiesByOrder(activities), latestTurnId);
+}
+
+export function deriveWorkLogEntriesFromSorted(
+  sortedActivities: ReadonlyArray<OrchestrationThreadActivity>,
+  latestTurnId: TurnId | undefined,
+): WorkLogEntry[] {
+  const entries = sortedActivities
     .filter((activity) =>
       latestTurnId
         ? activity.turnId === latestTurnId ||
@@ -1807,6 +1853,15 @@ function compareActivityLifecycleRank(kind: string): number {
     return 2;
   }
   return 1;
+}
+
+// Returns a stable sorted copy of `activities`. Call this once per render
+// boundary (e.g. in a ChatView useMemo) and pass the result to the
+// derive*/hasLiveTurnTailWork overloads that accept a pre-sorted array.
+export function sortActivitiesByOrder(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  return [...activities].toSorted(compareActivitiesByOrder);
 }
 
 export function deriveTimelineEntries(

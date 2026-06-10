@@ -19,7 +19,7 @@ import {
   type ServerLifecycleStreamEvent,
 } from "@t3tools/contracts";
 import { clamp } from "effect/Number";
-import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Path, PubSub, Queue, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
@@ -518,6 +518,22 @@ export const makeWsRpcLayer = () =>
         }
       };
 
+      // Single shared enrichment stream for all shell subscribers: toShellStreamEvent
+      // runs once per domain event regardless of how many subscribers are active.
+      // Each subscriber reads from its own PubSub subscription so per-subscriber
+      // Option.isSome filtering and backpressure remain independent.
+      const shellEventPubSub = yield* Effect.acquireRelease(
+        PubSub.unbounded<Option.Option<OrchestrationShellStreamEvent>>(),
+        PubSub.shutdown,
+      );
+      yield* orchestrationEngine.streamDomainEvents.pipe(
+        Stream.mapEffect(toShellStreamEvent),
+        Stream.runForEach((enriched) =>
+          PubSub.publish(shellEventPubSub, enriched).pipe(Effect.asVoid),
+        ),
+        Effect.forkScoped,
+      );
+
       const isThreadDetailEventFor = (threadId: ThreadId, event: OrchestrationEvent) =>
         event.aggregateKind === "thread" &&
         event.aggregateId === threadId &&
@@ -578,8 +594,7 @@ export const makeWsRpcLayer = () =>
                 Effect.mapError((cause) => toWsRpcError(cause, "Failed to load shell snapshot")),
               ),
             ),
-            orchestrationEngine.streamDomainEvents.pipe(
-              Stream.mapEffect(toShellStreamEvent),
+            Stream.fromPubSub(shellEventPubSub).pipe(
               Stream.flatMap((event) =>
                 Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
               ),

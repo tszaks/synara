@@ -6,24 +6,25 @@
  *
  * @module ClaudeAdapterLive
  */
-import {
-  type AgentInfo,
-  type CanUseTool,
-  type AgentDefinition,
+import type {
+  AgentInfo,
+  CanUseTool,
+  AgentDefinition,
   ModelUsage,
   NonNullableUsage,
-  query,
-  type Options as ClaudeQueryOptions,
-  type ModelInfo,
-  type PermissionMode,
-  type PermissionResult,
-  type PermissionUpdate,
-  type SDKMessage,
-  type SDKResultMessage,
-  type SettingSource,
-  type SDKUserMessage,
-  type SlashCommand,
+  Options as ClaudeQueryOptions,
+  ModelInfo,
+  PermissionMode,
+  PermissionResult,
+  PermissionUpdate,
+  SDKMessage,
+  SDKResultMessage,
+  SettingSource,
+  SDKUserMessage,
+  SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
+
+import { loadClaudeSdk } from "../sdkLoaders";
 import {
   ApprovalRequestId,
   type CanonicalItemType,
@@ -1276,10 +1277,75 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
     const createQuery =
       options?.createQuery ??
+      // Lazy default: defers loading the claude-agent-sdk until the first
+      // session is started. The proxy forwards every method call to the real
+      // runtime once the SDK module resolves (which happens synchronously
+      // inside the first async-iterator tick before any messages arrive).
       ((input: {
         readonly prompt: AsyncIterable<SDKUserMessage>;
         readonly options: ClaudeQueryOptions;
-      }) => query({ prompt: input.prompt, options: input.options }) as ClaudeQueryRuntime);
+      }): ClaudeQueryRuntime => {
+        let real: ClaudeQueryRuntime | undefined;
+        let realPromise: Promise<ClaudeQueryRuntime> | undefined;
+        let closed = false;
+        // Single-flight: concurrent callers share one SDK load and one query()
+        // construction, and a close() issued while the load is in flight is honored
+        // as soon as the runtime exists instead of being silently dropped.
+        const getReal = (): Promise<ClaudeQueryRuntime> =>
+          (realPromise ??= loadClaudeSdk()
+            .then(({ query }) => {
+              real = query({ prompt: input.prompt, options: input.options }) as ClaudeQueryRuntime;
+              if (closed) real.close();
+              return real;
+            })
+            .catch((error: unknown) => {
+              // A failed SDK load must not poison this runtime forever: clear the
+              // memo (loadClaudeSdk clears its own cache too) so the next call
+              // retries. query() has not consumed the prompt at this point.
+              realPromise = undefined;
+              throw error;
+            }));
+        return {
+          [Symbol.asyncIterator]: async function* () {
+            const r = await getReal();
+            yield* r;
+          },
+          interrupt: async () => {
+            // Only interrupt a runtime that exists or is being constructed —
+            // awaiting the in-flight load closes the start/interrupt race without
+            // ever triggering an SDK load on its own.
+            if (realPromise) return (await realPromise).interrupt();
+          },
+          setModel: async (model?: string) => {
+            const r = await getReal();
+            return r.setModel(model);
+          },
+          setPermissionMode: async (mode: PermissionMode) => {
+            const r = await getReal();
+            return r.setPermissionMode(mode);
+          },
+          setMaxThinkingTokens: async (max: number | null) => {
+            const r = await getReal();
+            return r.setMaxThinkingTokens(max);
+          },
+          supportedCommands: async () => {
+            const r = await getReal();
+            return r.supportedCommands();
+          },
+          supportedModels: async () => {
+            const r = await getReal();
+            return r.supportedModels();
+          },
+          supportedAgents: async () => {
+            const r = await getReal();
+            return r.supportedAgents();
+          },
+          close: () => {
+            closed = true;
+            if (real) real.close();
+          },
+        } as unknown as ClaudeQueryRuntime;
+      });
 
     const sessions = new Map<ThreadId, ClaudeSessionContext>();
     let cachedModels: ProviderListModelsResult | null = null;

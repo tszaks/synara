@@ -15,6 +15,7 @@ import {
   type OrchestrationSession,
   type OrchestrationProjectShell,
   type OrchestrationThread,
+  type OrchestrationThreadShell,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
@@ -338,7 +339,8 @@ const make = Effect.gen(function* () {
     readonly providerOptions?: ProviderStartOptions;
     readonly useConfiguredFallback?: boolean;
   }) {
-    const thread = yield* resolveThread(input.threadId);
+    // Shell query: only reads thread.modelSelection.
+    const thread = yield* resolveThreadShell(input.threadId);
     const modelSelection =
       input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread?.modelSelection;
     const providerOptions = input.providerOptions ?? threadProviderOptions.get(input.threadId);
@@ -411,7 +413,8 @@ const make = Effect.gen(function* () {
     readonly detail: string;
     readonly createdAt: string;
   }) {
-    const thread = yield* resolveThread(input.threadId);
+    // Shell query: only reads session.providerName, session.runtimeMode, modelSelection.provider.
+    const thread = yield* resolveThreadShell(input.threadId);
     if (!thread) {
       return;
     }
@@ -430,8 +433,14 @@ const make = Effect.gen(function* () {
     });
   });
 
+  // Full detail query — use only when message/activity/checkpoint content is needed.
   const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
+  });
+
+  // Shell query — 3 targeted SQL queries, no transcript. Use for metadata-only access.
+  const resolveThreadShell = Effect.fnUntraced(function* (threadId: ThreadId) {
+    return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadShellById(threadId));
   });
 
   // Recovers the parent thread when older/local-only subagent rows are missing parentThreadId metadata.
@@ -448,15 +457,16 @@ const make = Effect.gen(function* () {
     );
   });
 
+  // Uses shell queries for session/metadata access — no transcript load needed.
   const resolveProviderSessionThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    const thread = yield* resolveThread(threadId);
+    const thread = yield* resolveThreadShell(threadId);
     if (!thread) {
       return null;
     }
     if (!thread.parentThreadId) {
       return (yield* inferParentThreadFromSyntheticSubagentId(thread.id)) ?? thread;
     }
-    const parentThread = yield* resolveThread(thread.parentThreadId);
+    const parentThread = yield* resolveThreadShell(thread.parentThreadId);
     return parentThread ?? thread;
   });
 
@@ -673,7 +683,9 @@ const make = Effect.gen(function* () {
       readonly runtimeMode?: RuntimeMode;
     },
   ) {
-    const thread = yield* resolveThread(threadId);
+    // Shell query: reads runtimeMode, session, modelSelection, envMode, worktreePath,
+    // forkSourceThreadId, sidechatSourceThreadId — no transcript needed.
+    const thread = yield* resolveThreadShell(threadId);
     if (!thread) {
       return yield* Effect.die(
         new Error(`Thread '${threadId}' was not found in projection state.`),
@@ -977,7 +989,8 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      const currentThread = yield* resolveThread(input.threadId);
+      // Shell query: only needs projectId, envMode, worktreePath for cwd resolution.
+      const currentThread = yield* resolveThreadShell(input.threadId);
       if (!currentThread) {
         return;
       }
@@ -1500,7 +1513,8 @@ const make = Effect.gen(function* () {
   const processTurnInterruptRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
-    const thread = yield* resolveThread(event.payload.threadId);
+    // Shell query: reads thread.id, thread.session?.activeTurnId — no transcript needed.
+    const thread = yield* resolveThreadShell(event.payload.threadId);
     const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
     if (!thread || !providerThread) {
       return;
@@ -1530,7 +1544,8 @@ const make = Effect.gen(function* () {
   const processApprovalResponseRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.approval-response-requested" }>,
   ) {
-    const thread = yield* resolveThread(event.payload.threadId);
+    // Shell query: only checks existence and reads session metadata.
+    const thread = yield* resolveThreadShell(event.payload.threadId);
     const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
     if (!thread || !providerThread) {
       return;
@@ -1578,7 +1593,8 @@ const make = Effect.gen(function* () {
   const processUserInputResponseRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.user-input-response-requested" }>,
   ) {
-    const thread = yield* resolveThread(event.payload.threadId);
+    // Shell query: only checks existence and reads session metadata.
+    const thread = yield* resolveThreadShell(event.payload.threadId);
     const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
     if (!thread || !providerThread) {
       return;
@@ -1746,7 +1762,8 @@ const make = Effect.gen(function* () {
       createdAt: payload.createdAt,
     });
 
-    const thread = yield* resolveThread(payload.threadId);
+    // Shell query: only reads session.providerName and modelSelection.provider.
+    const thread = yield* resolveThreadShell(payload.threadId);
     if (thread && options?.preserveThreadSession !== true) {
       yield* setThreadSession({
         threadId: payload.threadId,
@@ -1803,7 +1820,8 @@ const make = Effect.gen(function* () {
   const processMessageEditResendRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.message-edit-resend-requested" }>,
   ) {
-    const thread = yield* resolveThread(event.payload.threadId);
+    // Shell query: reads session.providerName, modelSelection.provider, session.status only.
+    const thread = yield* resolveThreadShell(event.payload.threadId);
     const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
     const activeTurnId =
       providerThread?.session?.status === "running"
@@ -1855,7 +1873,8 @@ const make = Effect.gen(function* () {
   const processSessionStopRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) {
-    const thread = yield* resolveThread(event.payload.threadId);
+    // Shell query: reads thread.id and session fields only — no transcript needed.
+    const thread = yield* resolveThreadShell(event.payload.threadId);
     const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
     if (!thread) {
       return;
@@ -1930,7 +1949,8 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       switch (event.type) {
         case "thread.meta-updated": {
-          const thread = yield* resolveThread(event.payload.threadId);
+          // Shell query: only reads session.status and session.activeTurnId.
+          const thread = yield* resolveThreadShell(event.payload.threadId);
           if (event.payload.modelSelection === undefined) {
             return;
           }
@@ -1955,7 +1975,8 @@ const make = Effect.gen(function* () {
           return;
         }
         case "thread.runtime-mode-set": {
-          const thread = yield* resolveThread(event.payload.threadId);
+          // Shell query: only reads session.status.
+          const thread = yield* resolveThreadShell(event.payload.threadId);
           if (!thread?.session || thread.session.status === "stopped") {
             return;
           }

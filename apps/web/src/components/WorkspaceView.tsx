@@ -3,7 +3,7 @@
 // Layer: Workspace route surface
 
 import { Plus, SettingsIcon } from "~/lib/icons";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "~/components/ui/button";
@@ -24,7 +24,7 @@ import {
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "./chat/composerPickerStyles";
-import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
+const ThreadTerminalDrawer = lazy(() => import("./ThreadTerminalDrawer"));
 import WorkspaceSettingsSheet from "./WorkspaceSettingsSheet";
 import { onServerWelcome } from "~/wsNativeApi";
 import { useWorkspaceStore, workspaceThreadId } from "~/workspaceStore";
@@ -375,12 +375,14 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
               </div>
             </div>
           ) : terminalState.terminalOpen ? (
-            <ThreadTerminalDrawer
-              key={`${workspaceId}-workspace`}
-              {...terminalDrawerProps}
-              presentationMode="workspace"
-              isVisible
-            />
+            <Suspense fallback={null}>
+              <ThreadTerminalDrawer
+                key={`${workspaceId}-workspace`}
+                {...terminalDrawerProps}
+                presentationMode="workspace"
+                isVisible
+              />
+            </Suspense>
           ) : (
             <div className="flex h-full items-center justify-center px-6">
               <div className="max-w-sm rounded-3xl border border-border/70 bg-card/40 p-6 text-center shadow-sm">

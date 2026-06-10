@@ -17,7 +17,8 @@ export default defineConfig({
   outDir: "dist",
   sourcemap: buildSourcemap,
   clean: true,
-  noExternal: (id) => id.startsWith("@t3tools/"),
+  noExternal: (id) =>
+    id.startsWith("@t3tools/") || id === "effect-acp" || id.startsWith("effect-acp/"),
   inlineOnly: false,
   banner: {
     js: "#!/usr/bin/env node\n",

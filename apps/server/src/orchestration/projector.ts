@@ -74,12 +74,34 @@ function isTerminalLatestTurn(
   return latestTurn.state === "completed" || latestTurn.state === "error";
 }
 
-function updateThread(
-  threads: ReadonlyArray<OrchestrationThread>,
+// O(1) in-place update — Map.set on an existing key preserves insertion order,
+// matching the previous threads.map()-in-place semantics exactly.
+function updateThreadMap(
+  map: Map<ThreadId, OrchestrationThread>,
   threadId: ThreadId,
   patch: ThreadPatch,
-): OrchestrationThread[] {
-  return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
+): void {
+  const thread = map.get(threadId);
+  if (thread !== undefined) {
+    map.set(threadId, { ...thread, ...patch });
+  }
+}
+
+// Build an insertion-ordered Map from the thread array. Used once per projectEvent
+// call so all subsequent find/update ops within that call are O(1).
+function buildThreadsMap(
+  threads: ReadonlyArray<OrchestrationThread>,
+): Map<ThreadId, OrchestrationThread> {
+  const map = new Map<ThreadId, OrchestrationThread>();
+  for (const thread of threads) {
+    map.set(thread.id, thread);
+  }
+  return map;
+}
+
+// Materialize the Map back to an array in insertion order for the external contract.
+function threadsFromMap(map: Map<ThreadId, OrchestrationThread>): OrchestrationThread[] {
+  return Array.from(map.values());
 }
 
 function decodeForEvent<A>(
@@ -232,6 +254,25 @@ export function projectEvent(
     updatedAt: event.occurredAt,
   };
 
+  // Build the thread index once per event projection — all find/update ops
+  // within this call are then O(1) via Map, not O(threads).
+  // The Map is built lazily and shared across all branches via closure.
+  let _threadsMap: Map<ThreadId, OrchestrationThread> | null = null;
+  const getThreadsMap = (): Map<ThreadId, OrchestrationThread> => {
+    if (_threadsMap === null) {
+      _threadsMap = buildThreadsMap(nextBase.threads);
+    }
+    return _threadsMap;
+  };
+
+  // Apply a patch to the Map (O(1)) and return a new read model with the
+  // materialized array. Map.set on an existing key preserves insertion order.
+  const applyThreadPatch = (threadId: ThreadId, patch: ThreadPatch): OrchestrationReadModel => {
+    const map = getThreadsMap();
+    updateThreadMap(map, threadId, patch);
+    return { ...nextBase, threads: threadsFromMap(map) };
+  };
+
   switch (event.type) {
     case "project.created":
       return decodeForEvent(ProjectCreatedPayload, event.payload, event.type, "payload").pipe(
@@ -348,37 +389,30 @@ export function projectEvent(
           event.type,
           "thread",
         );
-        const existing = nextBase.threads.find((entry) => entry.id === thread.id);
-        return {
-          ...nextBase,
-          threads: existing
-            ? nextBase.threads.map((entry) => (entry.id === thread.id ? thread : entry))
-            : [...nextBase.threads, thread],
-        };
+        const map = getThreadsMap();
+        // Set always preserves insertion order for an existing key (upsert) or appends for new.
+        map.set(thread.id, thread);
+        return { ...nextBase, threads: threadsFromMap(map) };
       });
 
     case "thread.deleted":
       return decodeForEvent(ThreadDeletedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => ({
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
+        Effect.map((payload) =>
+          applyThreadPatch(payload.threadId, {
             deletedAt: payload.deletedAt,
             updatedAt: payload.deletedAt,
           }),
-        })),
+        ),
       );
 
     case "thread.archived":
       return decodeForEvent(ThreadArchivedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
           const archivedAt = payload.archivedAt ?? payload.updatedAt ?? event.occurredAt;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              archivedAt,
-              updatedAt: payload.updatedAt ?? archivedAt,
-            }),
-          };
+          return applyThreadPatch(payload.threadId, {
+            archivedAt,
+            updatedAt: payload.updatedAt ?? archivedAt,
+          });
         }),
       );
 
@@ -386,21 +420,17 @@ export function projectEvent(
       return decodeForEvent(ThreadUnarchivedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
           const updatedAt = payload.updatedAt ?? payload.unarchivedAt ?? event.occurredAt;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              archivedAt: null,
-              updatedAt,
-            }),
-          };
+          return applyThreadPatch(payload.threadId, {
+            archivedAt: null,
+            updatedAt,
+          });
         }),
       );
 
     case "thread.meta-updated":
       return decodeForEvent(ThreadMetaUpdatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
+          const existingThread = getThreadsMap().get(payload.threadId) ?? null;
           const nextCreateBranchFlowCompleted =
             payload.createBranchFlowCompleted !== undefined
               ? payload.createBranchFlowCompleted
@@ -409,51 +439,48 @@ export function projectEvent(
                   payload.branch !== existingThread.branch
                 ? false
                 : undefined;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              ...(payload.title !== undefined ? { title: payload.title } : {}),
-              ...(payload.modelSelection !== undefined
-                ? { modelSelection: payload.modelSelection }
-                : {}),
-              ...(payload.envMode !== undefined ? { envMode: payload.envMode } : {}),
-              ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
-              ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
-              ...(payload.associatedWorktreePath !== undefined
-                ? { associatedWorktreePath: payload.associatedWorktreePath }
-                : {}),
-              ...(payload.associatedWorktreeBranch !== undefined
-                ? { associatedWorktreeBranch: payload.associatedWorktreeBranch }
-                : {}),
-              ...(payload.associatedWorktreeRef !== undefined
-                ? { associatedWorktreeRef: payload.associatedWorktreeRef }
-                : {}),
-              ...(nextCreateBranchFlowCompleted !== undefined
-                ? { createBranchFlowCompleted: nextCreateBranchFlowCompleted }
-                : {}),
-              ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
-              ...(payload.parentThreadId !== undefined
-                ? { parentThreadId: payload.parentThreadId }
-                : {}),
-              ...(payload.subagentAgentId !== undefined
-                ? { subagentAgentId: payload.subagentAgentId }
-                : {}),
-              ...(payload.subagentNickname !== undefined
-                ? { subagentNickname: payload.subagentNickname }
-                : {}),
-              ...(payload.subagentRole !== undefined ? { subagentRole: payload.subagentRole } : {}),
-              ...(payload.lastKnownPr !== undefined ? { lastKnownPr: payload.lastKnownPr } : {}),
-              ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),
-              ...(payload.pinnedMessages !== undefined
-                ? { pinnedMessages: payload.pinnedMessages }
-                : {}),
-              ...(payload.threadMarkers !== undefined
-                ? { threadMarkers: payload.threadMarkers }
-                : {}),
-              ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
-              updatedAt: payload.updatedAt,
-            }),
-          };
+          return applyThreadPatch(payload.threadId, {
+            ...(payload.title !== undefined ? { title: payload.title } : {}),
+            ...(payload.modelSelection !== undefined
+              ? { modelSelection: payload.modelSelection }
+              : {}),
+            ...(payload.envMode !== undefined ? { envMode: payload.envMode } : {}),
+            ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
+            ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+            ...(payload.associatedWorktreePath !== undefined
+              ? { associatedWorktreePath: payload.associatedWorktreePath }
+              : {}),
+            ...(payload.associatedWorktreeBranch !== undefined
+              ? { associatedWorktreeBranch: payload.associatedWorktreeBranch }
+              : {}),
+            ...(payload.associatedWorktreeRef !== undefined
+              ? { associatedWorktreeRef: payload.associatedWorktreeRef }
+              : {}),
+            ...(nextCreateBranchFlowCompleted !== undefined
+              ? { createBranchFlowCompleted: nextCreateBranchFlowCompleted }
+              : {}),
+            ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
+            ...(payload.parentThreadId !== undefined
+              ? { parentThreadId: payload.parentThreadId }
+              : {}),
+            ...(payload.subagentAgentId !== undefined
+              ? { subagentAgentId: payload.subagentAgentId }
+              : {}),
+            ...(payload.subagentNickname !== undefined
+              ? { subagentNickname: payload.subagentNickname }
+              : {}),
+            ...(payload.subagentRole !== undefined ? { subagentRole: payload.subagentRole } : {}),
+            ...(payload.lastKnownPr !== undefined ? { lastKnownPr: payload.lastKnownPr } : {}),
+            ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),
+            ...(payload.pinnedMessages !== undefined
+              ? { pinnedMessages: payload.pinnedMessages }
+              : {}),
+            ...(payload.threadMarkers !== undefined
+              ? { threadMarkers: payload.threadMarkers }
+              : {}),
+            ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
+            updatedAt: payload.updatedAt,
+          });
         }),
       );
 
@@ -465,15 +492,11 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              pinnedMessages: addPinnedMessage(existingThread?.pinnedMessages, payload.pin),
-              updatedAt: payload.updatedAt,
-            }),
-          };
+          const existingThread = getThreadsMap().get(payload.threadId) ?? null;
+          return applyThreadPatch(payload.threadId, {
+            pinnedMessages: addPinnedMessage(existingThread?.pinnedMessages, payload.pin),
+            updatedAt: payload.updatedAt,
+          });
         }),
       );
 
@@ -485,18 +508,11 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              pinnedMessages: removePinnedMessage(
-                existingThread?.pinnedMessages,
-                payload.messageId,
-              ),
-              updatedAt: payload.updatedAt,
-            }),
-          };
+          const existingThread = getThreadsMap().get(payload.threadId) ?? null;
+          return applyThreadPatch(payload.threadId, {
+            pinnedMessages: removePinnedMessage(existingThread?.pinnedMessages, payload.messageId),
+            updatedAt: payload.updatedAt,
+          });
         }),
       );
 
@@ -508,19 +524,15 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              pinnedMessages: setPinnedMessageDone(
-                existingThread?.pinnedMessages,
-                payload.messageId,
-                payload.done,
-              ),
-              updatedAt: payload.updatedAt,
-            }),
-          };
+          const existingThread = getThreadsMap().get(payload.threadId) ?? null;
+          return applyThreadPatch(payload.threadId, {
+            pinnedMessages: setPinnedMessageDone(
+              existingThread?.pinnedMessages,
+              payload.messageId,
+              payload.done,
+            ),
+            updatedAt: payload.updatedAt,
+          });
         }),
       );
 
@@ -532,101 +544,80 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              pinnedMessages: setPinnedMessageLabel(
-                existingThread?.pinnedMessages,
-                payload.messageId,
-                payload.label,
-              ),
-              updatedAt: payload.updatedAt,
-            }),
-          };
+          const existingThread = getThreadsMap().get(payload.threadId) ?? null;
+          return applyThreadPatch(payload.threadId, {
+            pinnedMessages: setPinnedMessageLabel(
+              existingThread?.pinnedMessages,
+              payload.messageId,
+              payload.label,
+            ),
+            updatedAt: payload.updatedAt,
+          });
         }),
       );
 
     case "thread.marker-added":
       return decodeForEvent(ThreadMarkerAddedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: addThreadMarker(existingThread?.threadMarkers, payload.marker),
-              updatedAt: payload.updatedAt,
-            }),
-          };
+          const existingThread = getThreadsMap().get(payload.threadId) ?? null;
+          return applyThreadPatch(payload.threadId, {
+            threadMarkers: addThreadMarker(existingThread?.threadMarkers, payload.marker),
+            updatedAt: payload.updatedAt,
+          });
         }),
       );
 
     case "thread.marker-removed":
       return decodeForEvent(ThreadMarkerRemovedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: removeThreadMarker(existingThread?.threadMarkers, payload.markerId),
-              updatedAt: payload.updatedAt,
-            }),
-          };
+          const existingThread = getThreadsMap().get(payload.threadId) ?? null;
+          return applyThreadPatch(payload.threadId, {
+            threadMarkers: removeThreadMarker(existingThread?.threadMarkers, payload.markerId),
+            updatedAt: payload.updatedAt,
+          });
         }),
       );
 
     case "thread.marker-done-set":
       return decodeForEvent(ThreadMarkerDoneSetPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: setThreadMarkerDone(
-                existingThread?.threadMarkers,
-                payload.markerId,
-                payload.done,
-                payload.updatedAt,
-              ),
-              updatedAt: payload.updatedAt,
-            }),
-          };
+          const existingThread = getThreadsMap().get(payload.threadId) ?? null;
+          return applyThreadPatch(payload.threadId, {
+            threadMarkers: setThreadMarkerDone(
+              existingThread?.threadMarkers,
+              payload.markerId,
+              payload.done,
+              payload.updatedAt,
+            ),
+            updatedAt: payload.updatedAt,
+          });
         }),
       );
 
     case "thread.marker-label-set":
       return decodeForEvent(ThreadMarkerLabelSetPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: setThreadMarkerLabel(
-                existingThread?.threadMarkers,
-                payload.markerId,
-                payload.label,
-                payload.updatedAt,
-              ),
-              updatedAt: payload.updatedAt,
-            }),
-          };
+          const existingThread = getThreadsMap().get(payload.threadId) ?? null;
+          return applyThreadPatch(payload.threadId, {
+            threadMarkers: setThreadMarkerLabel(
+              existingThread?.threadMarkers,
+              payload.markerId,
+              payload.label,
+              payload.updatedAt,
+            ),
+            updatedAt: payload.updatedAt,
+          });
         }),
       );
 
     case "thread.runtime-mode-set":
       return decodeForEvent(ThreadRuntimeModeSetPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => ({
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
+        Effect.map((payload) =>
+          applyThreadPatch(payload.threadId, {
             runtimeMode: payload.runtimeMode,
             updatedAt: payload.updatedAt,
           }),
-        })),
+        ),
       );
 
     case "thread.interaction-mode-set":
@@ -636,13 +627,12 @@ export function projectEvent(
         event.type,
         "payload",
       ).pipe(
-        Effect.map((payload) => ({
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
+        Effect.map((payload) =>
+          applyThreadPatch(payload.threadId, {
             interactionMode: payload.interactionMode,
             updatedAt: payload.updatedAt,
           }),
-        })),
+        ),
       );
 
     case "thread.turn-start-requested":
@@ -653,7 +643,7 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = getThreadsMap().get(payload.threadId);
           if (!thread) {
             return nextBase;
           }
@@ -665,15 +655,12 @@ export function projectEvent(
               canAdoptFirstTurnProvider)
               ? { modelSelection: payload.modelSelection }
               : {};
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              ...modelSelectionPatch,
-              runtimeMode: payload.runtimeMode,
-              interactionMode: payload.interactionMode,
-              updatedAt: payload.createdAt,
-            }),
-          };
+          return applyThreadPatch(payload.threadId, {
+            ...modelSelectionPatch,
+            runtimeMode: payload.runtimeMode,
+            interactionMode: payload.interactionMode,
+            updatedAt: payload.createdAt,
+          });
         }),
       );
 
@@ -685,7 +672,7 @@ export function projectEvent(
           event.type,
           "payload",
         );
-        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        const thread = getThreadsMap().get(payload.threadId);
         if (!thread) {
           return nextBase;
         }
@@ -738,13 +725,10 @@ export function projectEvent(
           : [...thread.messages, message];
         const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
 
-        return {
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
-            messages: cappedMessages,
-            updatedAt: event.occurredAt,
-          }),
-        };
+        return applyThreadPatch(payload.threadId, {
+          messages: cappedMessages,
+          updatedAt: event.occurredAt,
+        });
       });
 
     case "thread.session-set":
@@ -755,7 +739,7 @@ export function projectEvent(
           event.type,
           "payload",
         );
-        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        const thread = getThreadsMap().get(payload.threadId);
         if (!thread) {
           return nextBase;
         }
@@ -767,36 +751,33 @@ export function projectEvent(
           "session",
         );
 
-        return {
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
-            session,
-            latestTurn:
-              session.status === "running" && session.activeTurnId !== null
-                ? thread.latestTurn?.turnId === session.activeTurnId &&
-                  isTerminalLatestTurn(thread.latestTurn)
-                  ? thread.latestTurn
-                  : {
-                      turnId: session.activeTurnId,
-                      state: "running",
-                      requestedAt:
-                        thread.latestTurn?.turnId === session.activeTurnId
-                          ? thread.latestTurn.requestedAt
-                          : session.updatedAt,
-                      startedAt:
-                        thread.latestTurn?.turnId === session.activeTurnId
-                          ? (thread.latestTurn.startedAt ?? session.updatedAt)
-                          : session.updatedAt,
-                      completedAt: null,
-                      assistantMessageId:
-                        thread.latestTurn?.turnId === session.activeTurnId
-                          ? thread.latestTurn.assistantMessageId
-                          : null,
-                    }
-                : thread.latestTurn,
-            updatedAt: event.occurredAt,
-          }),
-        };
+        return applyThreadPatch(payload.threadId, {
+          session,
+          latestTurn:
+            session.status === "running" && session.activeTurnId !== null
+              ? thread.latestTurn?.turnId === session.activeTurnId &&
+                isTerminalLatestTurn(thread.latestTurn)
+                ? thread.latestTurn
+                : {
+                    turnId: session.activeTurnId,
+                    state: "running",
+                    requestedAt:
+                      thread.latestTurn?.turnId === session.activeTurnId
+                        ? thread.latestTurn.requestedAt
+                        : session.updatedAt,
+                    startedAt:
+                      thread.latestTurn?.turnId === session.activeTurnId
+                        ? (thread.latestTurn.startedAt ?? session.updatedAt)
+                        : session.updatedAt,
+                    completedAt: null,
+                    assistantMessageId:
+                      thread.latestTurn?.turnId === session.activeTurnId
+                        ? thread.latestTurn.assistantMessageId
+                        : null,
+                  }
+              : thread.latestTurn,
+          updatedAt: event.occurredAt,
+        });
       });
 
     case "thread.proposed-plan-upserted":
@@ -807,7 +788,7 @@ export function projectEvent(
           event.type,
           "payload",
         );
-        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        const thread = getThreadsMap().get(payload.threadId);
         if (!thread) {
           return nextBase;
         }
@@ -822,13 +803,10 @@ export function projectEvent(
           )
           .slice(-200);
 
-        return {
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
-            proposedPlans,
-            updatedAt: event.occurredAt,
-          }),
-        };
+        return applyThreadPatch(payload.threadId, {
+          proposedPlans,
+          updatedAt: event.occurredAt,
+        });
       });
 
     case "thread.turn-diff-completed":
@@ -839,7 +817,7 @@ export function projectEvent(
           event.type,
           "payload",
         );
-        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        const thread = getThreadsMap().get(payload.threadId);
         if (!thread) {
           return nextBase;
         }
@@ -906,20 +884,17 @@ export function projectEvent(
                 assistantMessageId: preservedAssistantMessageId,
               };
 
-        return {
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
-            checkpoints,
-            latestTurn,
-            updatedAt: event.occurredAt,
-          }),
-        };
+        return applyThreadPatch(payload.threadId, {
+          checkpoints,
+          latestTurn,
+          updatedAt: event.occurredAt,
+        });
       });
 
     case "thread.reverted":
       return decodeForEvent(ThreadRevertedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = getThreadsMap().get(payload.threadId);
           if (!thread) {
             return nextBase;
           }
@@ -953,17 +928,14 @@ export function projectEvent(
                   assistantMessageId: latestCheckpoint.assistantMessageId,
                 };
 
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              checkpoints,
-              messages,
-              proposedPlans,
-              activities,
-              latestTurn,
-              updatedAt: event.occurredAt,
-            }),
-          };
+          return applyThreadPatch(payload.threadId, {
+            checkpoints,
+            messages,
+            proposedPlans,
+            activities,
+            latestTurn,
+            updatedAt: event.occurredAt,
+          });
         }),
       );
 
@@ -978,7 +950,7 @@ export function projectEvent(
           if (payload.numTurns === 0) {
             return nextBase;
           }
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = getThreadsMap().get(payload.threadId);
           if (!thread) {
             return nextBase;
           }
@@ -1000,27 +972,24 @@ export function projectEvent(
           );
           const latestCheckpoint = checkpoints.at(-1) ?? null;
 
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              checkpoints,
-              messages: rollback.messages.slice(-MAX_THREAD_MESSAGES),
-              proposedPlans,
-              activities,
-              latestTurn:
-                latestCheckpoint === null
-                  ? null
-                  : {
-                      turnId: latestCheckpoint.turnId,
-                      state: checkpointStatusToLatestTurnState(latestCheckpoint.status),
-                      requestedAt: latestCheckpoint.completedAt,
-                      startedAt: latestCheckpoint.completedAt,
-                      completedAt: latestCheckpoint.completedAt,
-                      assistantMessageId: latestCheckpoint.assistantMessageId,
-                    },
-              updatedAt: event.occurredAt,
-            }),
-          };
+          return applyThreadPatch(payload.threadId, {
+            checkpoints,
+            messages: rollback.messages.slice(-MAX_THREAD_MESSAGES),
+            proposedPlans,
+            activities,
+            latestTurn:
+              latestCheckpoint === null
+                ? null
+                : {
+                    turnId: latestCheckpoint.turnId,
+                    state: checkpointStatusToLatestTurnState(latestCheckpoint.status),
+                    requestedAt: latestCheckpoint.completedAt,
+                    startedAt: latestCheckpoint.completedAt,
+                    completedAt: latestCheckpoint.completedAt,
+                    assistantMessageId: latestCheckpoint.assistantMessageId,
+                  },
+            updatedAt: event.occurredAt,
+          });
         }),
       );
 
@@ -1032,7 +1001,7 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = getThreadsMap().get(payload.threadId);
           if (!thread) {
             return nextBase;
           }
@@ -1044,13 +1013,10 @@ export function projectEvent(
             .toSorted(compareThreadActivities)
             .slice(-MAX_THREAD_ACTIVITIES);
 
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              activities,
-              updatedAt: event.occurredAt,
-            }),
-          };
+          return applyThreadPatch(payload.threadId, {
+            activities,
+            updatedAt: event.occurredAt,
+          });
         }),
       );
 

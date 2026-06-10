@@ -1,19 +1,18 @@
 // FILE: diffRendering.test.ts
 // Purpose: Verifies shared git patch helpers used by diff chrome and header badges.
 // Layer: Web diff utility tests
-// Depends on: Vitest and diffRendering helpers
+// Depends on: Vitest, diffRendering helpers, and patchParsing for patch parsing
 
 import { describe, expect, it } from "vitest";
 import {
   buildFileDiffRenderKey,
   buildPatchCacheKey,
-  getRenderablePatch,
   resolveDiffCopyText,
   resolveFileDiffPath,
   sortFileDiffsByPath,
   splitRepoRelativePath,
-  summarizePatchTotals,
 } from "./diffRendering";
+import { getRenderablePatch, summarizePatchTotals } from "./patchParsing";
 
 describe("buildPatchCacheKey", () => {
   it("returns a stable cache key for identical content", () => {

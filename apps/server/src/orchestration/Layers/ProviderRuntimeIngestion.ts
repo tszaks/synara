@@ -12,6 +12,7 @@ import {
   TurnId,
   type OrchestrationThreadActivity,
   type OrchestrationThread,
+  type OrchestrationThreadShell,
   type ProviderRuntimeEvent,
   type RuntimeMode,
 } from "@t3tools/contracts";
@@ -275,21 +276,39 @@ function truncateJsonValue(
 }
 
 function boundActivityData(value: unknown): unknown {
+  // Fast path: primitives need no round-trip and cannot exceed the JSON char cap on their own.
+  // Preserve existing behavior: undefined → "null" via stringifyJsonLike, so returns null.
+  if (value === undefined) {
+    return null;
+  }
+  if (value === null || typeof value === "boolean" || typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string") {
+    // A string that exceeds the cap is returned as a truncated string (matching the
+    // original JSON.parse(stringifyJsonLike(value)) behavior for plain strings).
+    return truncateJsonString(value, MAX_ACTIVITY_DATA_JSON_CHARS);
+  }
+
   const serialized = stringifyJsonLike(value);
   if (serialized.length <= MAX_ACTIVITY_DATA_JSON_CHARS) {
+    // Reuse the already-serialized form rather than stringifying again for the parse.
     return JSON.parse(serialized);
   }
 
-  const withTruncationMetadata = (bounded: unknown): Record<string, unknown> => {
-    const metadata = {
-      [ACTIVITY_DATA_TRUNCATION_MARKER]: true,
-      originalJsonChars: serialized.length,
-    };
-    return isJsonObject(bounded) ? { ...bounded, ...metadata } : { ...metadata, value: bounded };
-  };
-  const hardFallback = (): Record<string, unknown> => ({
-    [ACTIVITY_DATA_TRUNCATION_MARKER]: true,
+  // Compute the metadata shape once, reusing serialized.length.
+  const truncationMetadata = {
+    [ACTIVITY_DATA_TRUNCATION_MARKER]: true as const,
     originalJsonChars: serialized.length,
+  };
+
+  const withTruncationMetadata = (bounded: unknown): Record<string, unknown> =>
+    isJsonObject(bounded)
+      ? { ...bounded, ...truncationMetadata }
+      : { ...truncationMetadata, value: bounded };
+
+  const hardFallback = (): Record<string, unknown> => ({
+    ...truncationMetadata,
     preview: truncateJsonString(serialized, MAX_ACTIVITY_DATA_STRING_CHARS),
   });
 
@@ -300,8 +319,10 @@ function boundActivityData(value: unknown): unknown {
     depth: 6,
   });
   const compactWithMetadata = withTruncationMetadata(compact);
-  if (stringifyJsonLike(compactWithMetadata).length <= MAX_ACTIVITY_DATA_JSON_CHARS) {
-    return compactWithMetadata;
+  // Compute the compacted serialized form once and reuse for the length check.
+  const compactSerialized = stringifyJsonLike(compactWithMetadata);
+  if (compactSerialized.length <= MAX_ACTIVITY_DATA_JSON_CHARS) {
+    return JSON.parse(compactSerialized);
   }
 
   const bounded = withTruncationMetadata(
@@ -312,8 +333,9 @@ function boundActivityData(value: unknown): unknown {
       depth: 4,
     }),
   );
-  return stringifyJsonLike(bounded).length <= MAX_ACTIVITY_DATA_JSON_CHARS
-    ? bounded
+  const boundedSerialized = stringifyJsonLike(bounded);
+  return boundedSerialized.length <= MAX_ACTIVITY_DATA_JSON_CHARS
+    ? JSON.parse(boundedSerialized)
     : hardFallback();
 }
 
@@ -1127,12 +1149,22 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
   });
 
+  // Full detail query — use only when message/activity/checkpoint/proposedPlan content is needed.
   const getThreadDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
   ): Effect.fn.Return<OrchestrationThread | undefined> {
     return Option.getOrUndefined(
       yield* projectionSnapshotQuery
         .getThreadDetailById(threadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    );
+  });
+
+  // Shell query — 3 targeted SQL queries, no transcript. Use for metadata-only access.
+  const getThreadShell = Effect.fnUntraced(function* (threadId: ThreadId) {
+    return Option.getOrUndefined(
+      yield* projectionSnapshotQuery
+        .getThreadShellById(threadId)
         .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
     );
   });
@@ -1148,7 +1180,8 @@ const make = Effect.gen(function* () {
   });
 
   const isGitRepoForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    const thread = yield* getThreadDetail(threadId);
+    // Shell query: only reads projectId, envMode, worktreePath for cwd resolution.
+    const thread = yield* getThreadShell(threadId);
     if (!thread) {
       return false;
     }

@@ -10,14 +10,16 @@ describe("parseCodeFenceInfo", () => {
       fileName: "model.ts",
       directory: "packages/shared/src",
       lineRange: "173-186",
-      language: "typescript",
+      // File-reference languages resolve from the file name inside the lazy
+      // ShikiCodeBlock module (see resolveFenceLanguage), not here.
+      language: null,
     });
   });
 
   it("collapses a single-line reference range", () => {
     const fence = parseCodeFenceInfo("42:42:src/app.tsx");
     expect(fence.lineRange).toBe("42");
-    expect(fence.language).toBe("tsx");
+    expect(fence.language).toBeNull();
   });
 
   it("treats a bare path as an un-ranged file reference", () => {
@@ -27,16 +29,16 @@ describe("parseCodeFenceInfo", () => {
       fileName: "index.py",
       directory: "src",
       lineRange: null,
-      language: "python",
+      language: null,
     });
   });
 
-  it("resolves a language for files without a directory", () => {
+  it("resolves metadata for files without a directory", () => {
     const fence = parseCodeFenceInfo("12:20:Dockerfile");
     expect(fence.isFileReference).toBe(true);
     expect(fence.directory).toBeNull();
     expect(fence.fileName).toBe("Dockerfile");
-    expect(fence.language).toBe("dockerfile");
+    expect(fence.language).toBeNull();
   });
 
   it("keeps bare language tokens as-is", () => {
@@ -50,10 +52,6 @@ describe("parseCodeFenceInfo", () => {
   it("falls back to text for an empty info string and maps gitignore to ini", () => {
     expect(parseCodeFenceInfo("").language).toBe("text");
     expect(parseCodeFenceInfo("gitignore").language).toBe("ini");
-  });
-
-  it("falls back to text for unknown extensions", () => {
-    expect(parseCodeFenceInfo("1:2:notes.unknownext").language).toBe("text");
   });
 });
 

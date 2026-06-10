@@ -51,7 +51,7 @@ import {
   type ResumableDownloaderTarget,
 } from "./resumableUpdateDownload";
 import { ServerListeningDetector } from "./serverListeningDetector";
-import { syncShellEnvironment } from "./syncShellEnvironment";
+import { syncShellEnvironmentAsync } from "./syncShellEnvironment";
 import {
   type DownloadProgressSample,
   getAutoUpdateDisabledReason,
@@ -108,7 +108,11 @@ import {
   seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
 
-syncShellEnvironment();
+// Kick off the login-shell env probe asynchronously at module load so Electron
+// framework initialization is not blocked by heavy rc-file execution.
+// bootstrap() awaits this before spawning the backend so the child inherits the
+// correct PATH, SSH_AUTH_SOCK, and Homebrew variables.
+const shellEnvReady: Promise<void> = syncShellEnvironmentAsync();
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
 const SAVE_FILE_CHANNEL = "desktop:save-file";
@@ -2518,6 +2522,12 @@ if (!hasSingleInstanceLock) {
 async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
+
+  // Await shell env sync before reserving the backend endpoint and spawning the
+  // backend child process so it inherits the correct PATH and env vars.
+  await shellEnvReady;
+  writeDesktopLogHeader("bootstrap shell env ready");
+
   await reserveBackendEndpoint("bootstrap");
 
   registerIpcHandlers();

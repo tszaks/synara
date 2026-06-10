@@ -21,8 +21,9 @@ import type {
 import { ServerProviderUpdateError } from "@t3tools/contracts";
 import { parseCodexConfigModelProvider } from "@t3tools/shared/codexConfig";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
-import { query as claudeQuery, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+
+import { loadClaudeSdk, loadPiCodingAgent } from "../sdkLoaders";
 import {
   Array,
   Cache,
@@ -513,6 +514,7 @@ function waitForAbortSignal(signal: AbortSignal): Promise<void> {
 const probeClaudeSubscription = () => {
   const abort = new AbortController();
   return Effect.tryPromise(async () => {
+    const { query: claudeQuery } = await loadClaudeSdk();
     const q = claudeQuery({
       // oxlint-disable-next-line require-yield
       prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
@@ -1511,41 +1513,44 @@ export const checkPiProviderStatus = (
         ? parseGenericCliVersion(`${version.stdout}\n${version.stderr}`)
         : null;
 
-    try {
-      const trimmedAgentDir = nonEmptyTrimmed(agentDir);
-      const authStorage = trimmedAgentDir
-        ? AuthStorage.create(nodePath.join(trimmedAgentDir, "auth.json"))
-        : AuthStorage.create();
-      const registry = trimmedAgentDir
-        ? ModelRegistry.create(authStorage, nodePath.join(trimmedAgentDir, "models.json"))
-        : ModelRegistry.create(authStorage);
-      registry.refresh();
-      const modelCount = registry.getAvailable().length;
-      const authPath = trimmedAgentDir
-        ? nodePath.join(trimmedAgentDir, "auth.json")
-        : "~/.pi/agent/auth.json";
-      return {
-        provider: PI_PROVIDER,
-        status: modelCount > 0 ? "ready" : "warning",
-        available: modelCount > 0,
-        authStatus: modelCount > 0 ? "authenticated" : "unknown",
-        version: parsedVersion,
-        checkedAt,
-        message:
-          modelCount > 0
-            ? `Pi SDK is available with ${modelCount} authenticated model${modelCount === 1 ? "" : "s"}.`
-            : `Pi SDK is available, but no authenticated models were found in ${authPath}.`,
-      } satisfies ServerProviderStatus;
-    } catch (cause) {
-      return {
-        provider: PI_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: `Failed to read Pi auth/model registry: ${cause instanceof Error ? cause.message : String(cause)}.`,
-      } satisfies ServerProviderStatus;
-    }
+    return yield* Effect.promise(async () => {
+      try {
+        const { AuthStorage, ModelRegistry } = await loadPiCodingAgent();
+        const trimmedAgentDir = nonEmptyTrimmed(agentDir);
+        const authStorage = trimmedAgentDir
+          ? AuthStorage.create(nodePath.join(trimmedAgentDir, "auth.json"))
+          : AuthStorage.create();
+        const registry = trimmedAgentDir
+          ? ModelRegistry.create(authStorage, nodePath.join(trimmedAgentDir, "models.json"))
+          : ModelRegistry.create(authStorage);
+        registry.refresh();
+        const modelCount = registry.getAvailable().length;
+        const authPath = trimmedAgentDir
+          ? nodePath.join(trimmedAgentDir, "auth.json")
+          : "~/.pi/agent/auth.json";
+        return {
+          provider: PI_PROVIDER,
+          status: modelCount > 0 ? "ready" : "warning",
+          available: modelCount > 0,
+          authStatus: modelCount > 0 ? "authenticated" : "unknown",
+          version: parsedVersion,
+          checkedAt,
+          message:
+            modelCount > 0
+              ? `Pi SDK is available with ${modelCount} authenticated model${modelCount === 1 ? "" : "s"}.`
+              : `Pi SDK is available, but no authenticated models were found in ${authPath}.`,
+        } satisfies ServerProviderStatus;
+      } catch (cause) {
+        return {
+          provider: PI_PROVIDER,
+          status: "error" as const,
+          available: false,
+          authStatus: "unknown" as const,
+          checkedAt,
+          message: `Failed to read Pi auth/model registry: ${cause instanceof Error ? cause.message : String(cause)}.`,
+        } satisfies ServerProviderStatus;
+      }
+    });
   });
 
 // ── Cursor health check ─────────────────────────────────────────────

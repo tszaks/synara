@@ -10,11 +10,10 @@ export const MAC_INHERITED_ENTITLEMENTS_PATH =
   "apps/desktop/resources/entitlements.mac.inherit.plist";
 const MAC_AFTER_PACK_HOOK_PATH = "./electron-builder-after-pack.cjs";
 const MAC_DMG_ICON_PATH = "icon.icns";
-export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
-
 export interface DesktopPlatformBuildConfig {
   readonly afterPack?: string;
   readonly asarUnpack?: ReadonlyArray<string>;
+  readonly files?: ReadonlyArray<string>;
   readonly dmg?: {
     readonly icon: string;
   };
@@ -24,6 +23,7 @@ export interface DesktopPlatformBuildConfig {
 }
 
 export interface CreateDesktopPlatformBuildConfigInput {
+  readonly arch: "arm64" | "x64" | "universal";
   readonly hasMacIconComposer: boolean;
   readonly platform: "linux" | "mac" | "win";
   readonly target: string;
@@ -51,10 +51,78 @@ export function validateDesktopNativeBuildHost(input: DesktopNativeBuildHostInpu
   ].join(" ");
 }
 
+// Maps electron-builder platform names to the OS-level subdirectory inside node-pty/prebuilds.
+const PLATFORM_TO_PREBUILD_OS: Record<"linux" | "mac" | "win", string> = {
+  mac: "darwin",
+  win: "win32",
+  linux: "linux",
+};
+
+// All OS prefixes that node-pty ships prebuilds for.
+const ALL_PREBUILD_OS_PREFIXES = ["darwin", "win32", "linux"] as const;
+
+/**
+ * Returns the asarUnpack glob for the target platform+arch and the files-negation
+ * patterns that strip foreign-platform prebuilds from the installer.
+ *
+ * asarUnpack only controls which files are *extracted* from the asar archive — it
+ * does not remove foreign prebuilds from the packaged app. The files exclusion is
+ * required to actually shrink the download size.
+ */
+export function resolveNodePtyPackaging(
+  platform: "linux" | "mac" | "win",
+  arch: "arm64" | "x64" | "universal",
+): { asarUnpack: ReadonlyArray<string>; filesExclude: ReadonlyArray<string> } {
+  if (arch === "universal" && platform !== "mac") {
+    // A win32-universal/linux-universal prebuild dir does not exist, so the
+    // asarUnpack glob would silently match nothing and the app would ship
+    // without a usable pty binary. Fail loudly instead.
+    throw new Error(`Universal desktop builds are only supported on mac, not ${platform}.`);
+  }
+  const targetOs = PLATFORM_TO_PREBUILD_OS[platform];
+
+  // For a universal macOS build, unpack both darwin archs.
+  const targetPrebuildDirs =
+    arch === "universal" && platform === "mac"
+      ? [
+          `node_modules/node-pty/prebuilds/darwin-arm64`,
+          `node_modules/node-pty/prebuilds/darwin-x64`,
+        ]
+      : [`node_modules/node-pty/prebuilds/${targetOs}-${arch}`];
+
+  const asarUnpack = [
+    ...targetPrebuildDirs.map((d) => `${d}/**`),
+    // Non-prebuild runtime files required at startup.
+    "node_modules/node-pty/lib/**",
+    "node_modules/node-pty/package.json",
+  ];
+
+  // Exclude every prebuild directory that is NOT needed for the target platform.
+  const filesExclude = ALL_PREBUILD_OS_PREFIXES.flatMap((os) => {
+    if (os !== targetOs) {
+      // Entire foreign OS — exclude everything.
+      return [`!node_modules/node-pty/prebuilds/${os}-*/**`];
+    }
+    if (arch === "universal") {
+      // Universal builds keep both darwin archs; nothing to exclude within darwin.
+      return [];
+    }
+    // Same OS but wrong arch — exclude sibling arch dirs.
+    const sibling = arch === "arm64" ? "x64" : "arm64";
+    return [`!node_modules/node-pty/prebuilds/${os}-${sibling}/**`];
+  });
+
+  return { asarUnpack, filesExclude };
+}
+
 export function createDesktopPlatformBuildConfig(
   input: CreateDesktopPlatformBuildConfigInput,
 ): DesktopPlatformBuildConfig {
-  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS] };
+  const { asarUnpack, filesExclude } = resolveNodePtyPackaging(input.platform, input.arch);
+  const nativePackaging = {
+    asarUnpack,
+    ...(filesExclude.length > 0 ? { files: ["**/*", ...filesExclude] } : {}),
+  };
 
   if (input.platform === "mac") {
     const mac = {

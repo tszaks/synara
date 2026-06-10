@@ -21,12 +21,11 @@ import { useTheme } from "../hooks/useTheme";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   buildFileDiffRenderKey,
-  getRenderablePatch,
   resolveDiffCopyText,
   sortFileDiffsByPath,
-  summarizePatchTotals,
   summarizeRenderablePatchStats,
 } from "../lib/diffRendering";
+import { getRenderablePatch, summarizePatchTotals } from "../lib/patchParsing";
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { type RepoDiffScope, useRepoDiffScopeStore } from "../repoDiffScopeStore";
@@ -80,8 +79,6 @@ interface DiffPanelProps {
   /** When false, skip git/diff fetches (e.g. right dock collapsed or pane hidden). */
   queriesEnabled?: boolean;
 }
-
-export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 
 export default function DiffPanel({
   mode = "inline",

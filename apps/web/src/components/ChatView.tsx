@@ -1,44 +1,30 @@
 import {
   type ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
-  type ClaudeCodeEffort,
   MessageId,
   type ModelSelection,
   type ProjectScript,
   type ModelSlug,
   type ProviderKind,
-  type ProjectEntry,
   type ProjectId,
   type ProviderApprovalDecision,
   type ProviderMentionReference,
-  type ProviderNativeCommandDescriptor,
-  type ProviderPluginDescriptor,
-  type ProviderSkillDescriptor,
   type ProviderSkillReference,
   type ProviderStartOptions,
   type ProviderUserInputAnswers,
-  type PinnedMessage,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-  type ResolvedKeybindingsConfig,
-  type ServerProviderStatus,
   ThreadId,
   ThreadMarkerId,
   type ThreadMarker,
   type ThreadMarkerColor,
   type ThreadMarkerStyle,
   type TurnId,
-  type EditorId,
   type KeybindingCommand,
-  OrchestrationThreadActivity,
   ProviderInteractionMode,
   RuntimeMode,
 } from "@t3tools/contracts";
-import {
-  applyClaudePromptEffortPrefix,
-  getModelCapabilities,
-  normalizeModelSlug,
-} from "@t3tools/shared/model";
+import { getModelCapabilities } from "@t3tools/shared/model";
 import { resolveTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import {
@@ -52,6 +38,8 @@ import {
 } from "@t3tools/shared/threadEnvironment";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -73,10 +61,8 @@ import {
 } from "~/lib/gitReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
-  providerAgentsQueryOptions,
   providerComposerCapabilitiesQueryOptions,
   providerCommandsQueryOptions,
-  providerModelsQueryOptions,
   providerPluginsQueryOptions,
   providerSkillsQueryOptions,
   supportsNativeSlashCommandDiscovery,
@@ -94,7 +80,6 @@ import {
 import { getLocalFolderBrowseRootPath, isLocalFolderMentionQuery } from "~/lib/localFolderMentions";
 import {
   isProviderUsable,
-  normalizeCustomBinaryPath,
   normalizeProviderStatusForLocalConfig,
   providerUnavailableReason,
 } from "~/lib/providerAvailability";
@@ -124,7 +109,6 @@ import {
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   shouldConsumePendingCustomBinaryConfirmation,
-  shouldShowComposerModelBootstrapSkeleton,
 } from "./ChatView.logic";
 import {
   createRelevantWorkLogThreadsSelector,
@@ -156,20 +140,20 @@ import {
   resolveComposerSlashRootBranch,
 } from "../composerSlashCommands";
 import {
-  derivePendingApprovals,
-  derivePendingUserInputs,
+  derivePendingApprovalsFromSorted,
+  derivePendingUserInputsFromSorted,
   derivePhase,
   deriveTimelineEntries,
   deriveActiveWorkStartedAt,
-  deriveActiveTaskListState,
-  deriveActiveBackgroundTasksState,
+  deriveActiveTaskListStateFromSorted,
+  deriveActiveBackgroundTasksStateFromSorted,
   findSidebarProposedPlan,
   findLatestProposedPlan,
-  deriveWorkLogEntries,
+  deriveWorkLogEntriesFromSorted,
   hasActionableProposedPlan,
   hasLiveTurnTailWork,
   isLatestTurnSettled,
-  WORK_LOG_PRESENTATION_VERSION,
+  sortActivitiesByOrder,
   type ActiveTaskListState,
 } from "../session-logic";
 import {
@@ -216,18 +200,16 @@ import {
 } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
-import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
+const ThreadTerminalDrawer = lazy(() => import("./ThreadTerminalDrawer"));
 import {
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ComposerSendArrowIcon,
-  RefreshCwIcon,
   XIcon,
 } from "~/lib/icons";
 import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
 import { Button } from "./ui/button";
-import { Skeleton } from "./ui/skeleton";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { disposeAndCloseTerminalSession, randomTerminalId } from "./terminal/terminalSession";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
@@ -251,16 +233,12 @@ import {
 } from "~/lib/terminalCloseConfirmation";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
 import {
-  getAppModelOptions,
   getCustomBinaryPathForProvider,
-  getCustomModelsByProvider,
-  getProviderStartOptions,
   resolveAppModelSelection,
   useAppSettings,
 } from "../appSettings";
 import { resolveTerminalNewAction } from "../lib/terminalNewAction";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { compareProvidersByOrder } from "../providerOrdering";
 import {
   type ComposerImageAttachment,
   type ComposerAssistantSelectionAttachment,
@@ -271,7 +249,6 @@ import {
   type QueuedComposerTurn,
   useComposerDraftStore,
   useComposerThreadDraft,
-  useEffectiveComposerModelState,
 } from "../composerDraftStore";
 import {
   appendOriginalTerminalContextBlock,
@@ -285,7 +262,6 @@ import {
 } from "../lib/terminalContext";
 import {
   appendAssistantSelectionsToPrompt,
-  formatAssistantSelectionQueuePreview,
   formatAssistantSelectionTitleSeed,
 } from "../lib/assistantSelections";
 import {
@@ -332,7 +308,6 @@ import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimelin
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
-import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
 import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import {
@@ -358,7 +333,6 @@ import {
   dispatchThreadMarkerLabelSet,
   dispatchThreadMarkerRemove,
 } from "../threadMarkers";
-import { getComposerProviderState } from "./chat/composerProviderRegistry";
 import {
   COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME,
   COMPOSER_INPUT_SHELL_CLASS_NAME,
@@ -374,16 +348,11 @@ import {
   ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./chat/composerPickerStyles";
 import { getComposerTraitSelection } from "./chat/composerTraits";
-import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { FolderClosed } from "./FolderClosed";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
-import {
-  RateLimitBanner,
-  deriveLatestRateLimitStatus,
-  type RateLimitStatus,
-} from "./chat/RateLimitBanner";
+import { RateLimitBanner, deriveLatestRateLimitStatus } from "./chat/RateLimitBanner";
 import {
   ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS,
   appendVoiceTranscriptToPrompt,
@@ -416,7 +385,6 @@ import {
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useFeatureFlags } from "../featureFlags";
-import { collapseCursorModelVariants } from "../cursorModelVariants";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
@@ -427,344 +395,51 @@ import {
   resolveDiffEnvironmentState,
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
-import {
-  buildModelSelection,
-  buildNextProviderOptions,
-  formatProviderModelOptionName,
-  type ProviderModelOption,
-} from "../providerModelOptions";
+import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
 import {
   isDuplicateProjectCreateError,
   waitForRecoverableProjectForDuplicateCreate,
 } from "../lib/projectCreateRecovery";
-
-const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
-const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
-const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
-const EMPTY_MESSAGES: ChatMessage[] = [];
-const EMPTY_PINNED_MESSAGES: readonly PinnedMessage[] = [];
-const EMPTY_THREAD_MARKERS: readonly ThreadMarker[] = [];
-const EMPTY_PINNED_TEXT: ReadonlyMap<MessageId, string> = new Map();
-const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
-const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
-const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
-const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
-const EMPTY_COMPOSER_SUGGESTIONS: ComposerSuggestion[] = [];
-const EMPTY_SUGGESTION_SOURCE_THREADS: Thread[] = [];
-const selectEmptyComposerSuggestionThreads: ReturnType<typeof createAllThreadsSelector> = () =>
-  EMPTY_SUGGESTION_SOURCE_THREADS;
-
-function revokeBlobPreviewUrlsAfterPaint(previewUrls: readonly string[]): void {
-  if (previewUrls.length === 0 || typeof window === "undefined") {
-    return;
-  }
-  window.requestAnimationFrame(() => {
-    window.setTimeout(() => {
-      for (const previewUrl of previewUrls) {
-        revokeBlobPreviewUrl(previewUrl);
-      }
-    }, 0);
-  });
-}
-
-function eventTargetsComposer(
-  event: globalThis.KeyboardEvent,
-  composerForm: HTMLFormElement | null,
-): boolean {
-  if (!composerForm) return false;
-  const target = event.target;
-  return target instanceof Node ? composerForm.contains(target) : false;
-}
-
-function canHandleComposerPickerShortcut(
-  event: globalThis.KeyboardEvent,
-  composerForm: HTMLFormElement | null,
-): boolean {
-  if (!composerForm) return false;
-  if (eventTargetsComposer(event, composerForm)) return true;
-  const target = event.target;
-  return (
-    target === document.body ||
-    target === document.documentElement ||
-    document.activeElement === document.body ||
-    document.activeElement === document.documentElement
-  );
-}
-const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
-const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
-const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
-const MAX_DISMISSED_PROVIDER_HEALTH_BANNERS = 50;
-
-function getThreadProviderCustomBinaryPathKey(threadId: Thread["id"], provider: ProviderKind) {
-  return `${threadId}:${provider}`;
-}
-
-function getConfirmedCustomBinarySessionKey(
-  thread: Thread | null | undefined,
-  provider: ProviderKind,
-): string | null {
-  const session = thread?.session;
-  if (!thread || session?.provider !== provider) {
-    return null;
-  }
-  if (session.status !== "ready" && session.status !== "running") {
-    return null;
-  }
-  return getThreadProviderCustomBinaryPathKey(thread.id, provider);
-}
-
-function getProviderStartOptionsCustomBinaryPath(
-  providerOptions: ProviderStartOptions | undefined,
-  provider: ProviderKind,
-): string | null {
-  switch (provider) {
-    case "codex":
-      return normalizeCustomBinaryPath(providerOptions?.codex?.binaryPath);
-    case "claudeAgent":
-      return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
-    case "gemini":
-      return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
-    case "grok":
-      return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
-    case "kilo":
-      return normalizeCustomBinaryPath(providerOptions?.kilo?.binaryPath);
-    case "opencode":
-      return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
-    case "cursor":
-      return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
-    case "pi":
-      return normalizeCustomBinaryPath(providerOptions?.pi?.binaryPath);
-  }
-}
-
-function getProviderHealthBannerDismissalKey(status: ServerProviderStatus | null): string | null {
-  if (!status || status.status === "ready") {
-    return null;
-  }
-  return [
-    status.provider,
-    status.status,
-    status.available ? "available" : "unavailable",
-    status.authStatus,
-    status.message?.trim() ?? "",
-  ].join("\u001f");
-}
-
-function getRateLimitBannerDismissalKey(
-  status: RateLimitStatus | null,
-  threadId: Thread["id"] | null,
-): string | null {
-  if (!status || !threadId) {
-    return null;
-  }
-  return [
-    threadId,
-    status.status,
-    status.resetsAt ?? "",
-    typeof status.utilization === "number" ? String(Math.round(status.utilization * 100)) : "",
-  ].join("\u001f");
-}
-
-type ComposerPluginSuggestion = {
-  plugin: ProviderPluginDescriptor;
-  mention: ProviderMentionReference;
-};
-
-const EMPTY_COMPOSER_PLUGIN_SUGGESTIONS: ComposerPluginSuggestion[] = [];
-
-function formatOutgoingPrompt(params: {
-  provider: ProviderKind;
-  model: string | null;
-  effort: string | null;
-  text: string;
-}): string {
-  const caps = getModelCapabilities(params.provider, params.model);
-  if (params.effort && caps.promptInjectedEffortLevels.includes(params.effort)) {
-    return applyClaudePromptEffortPrefix(params.text, params.effort as ClaudeCodeEffort | null);
-  }
-  return params.text;
-}
-
-function buildQueuedComposerPreviewText(input: {
-  trimmedPrompt: string;
-  images: ReadonlyArray<ComposerImageAttachment>;
-  assistantSelections: ReadonlyArray<{ id: string }>;
-  terminalContexts: ReadonlyArray<TerminalContextDraft>;
-}): string {
-  if (input.trimmedPrompt.length > 0) {
-    return input.trimmedPrompt;
-  }
-  const firstImage = input.images[0];
-  if (firstImage) {
-    return `Image: ${firstImage.name}`;
-  }
-  if (input.assistantSelections.length > 0) {
-    return formatAssistantSelectionQueuePreview(input.assistantSelections.length);
-  }
-  const firstTerminalContext = input.terminalContexts[0];
-  if (firstTerminalContext) {
-    return formatTerminalContextLabel(firstTerminalContext);
-  }
-  return "Queued follow-up";
-}
-
-const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
-const VOICE_RECORDER_ACTION_ARM_DELAY_MS = 250;
-
-function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
-  if (!import.meta.env.DEV) {
-    return;
-  }
-  if (details) {
-    console.warn(`[voice] ${event}`, details);
-    return;
-  }
-  console.warn(`[voice] ${event}`);
-}
-
-function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string {
-  if (provider === "claudeAgent") {
-    const withoutContextSuffix = slug.replace(/\[[^\]]+\]$/u, "");
-    return normalizeModelSlug(withoutContextSuffix, provider) ?? withoutContextSuffix;
-  }
-  if (provider === "grok") {
-    return slug.trim();
-  }
-  return normalizeModelSlug(slug, provider) ?? slug;
-}
-
-function mergeDynamicModelOptions(input: {
-  provider: ProviderKind;
-  staticOptions: ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>;
-  dynamicModels: ReadonlyArray<{
-    slug: string;
-    name?: string | null;
-    upstreamProviderId?: string | null;
-    upstreamProviderName?: string | null;
-  }>;
-}): ReadonlyArray<ProviderModelOption & { isCustom?: boolean }> {
-  const staticNameBySlug = new Map(input.staticOptions.map((model) => [model.slug, model.name]));
-  const dynamicNormalizedSlugs = new Set<string>();
-  const normalizedDynamicOptions: ProviderModelOption[] = [];
-
-  for (const dynamicModel of input.dynamicModels) {
-    const rawName = dynamicModel.name?.trim() ?? "";
-    const isClaudeDefaultAlias =
-      input.provider === "claudeAgent" &&
-      (rawName.toLowerCase() === "default (recommended)" ||
-        rawName.toLowerCase() === "default recommended" ||
-        dynamicModel.slug.trim().toLowerCase() === "default");
-    if (isClaudeDefaultAlias) {
-      continue;
-    }
-
-    const normalizedSlug = normalizeDynamicModelSlug(input.provider, dynamicModel.slug);
-    const rawSlug = dynamicModel.slug.trim().toLowerCase();
-    const displayNameFallback = formatProviderModelOptionName({
-      provider: input.provider,
-      slug: normalizedSlug,
-    });
-    if (dynamicNormalizedSlugs.has(normalizedSlug)) {
-      continue;
-    }
-    dynamicNormalizedSlugs.add(normalizedSlug);
-    normalizedDynamicOptions.push({
-      slug: normalizedSlug,
-      name:
-        staticNameBySlug.get(normalizedSlug) ??
-        (rawName.length > 0 &&
-        rawName.toLowerCase() !== rawSlug &&
-        rawName.toLowerCase() !== normalizedSlug.toLowerCase()
-          ? rawName
-          : displayNameFallback),
-      ...(dynamicModel.upstreamProviderId?.trim()
-        ? { upstreamProviderId: dynamicModel.upstreamProviderId.trim() }
-        : {}),
-      ...(dynamicModel.upstreamProviderName?.trim()
-        ? { upstreamProviderName: dynamicModel.upstreamProviderName.trim() }
-        : {}),
-    });
-  }
-
-  const customOnlyModels = input.staticOptions.filter(
-    (model) => "isCustom" in model && model.isCustom && !dynamicNormalizedSlugs.has(model.slug),
-  );
-  const staticBuiltInModels = input.staticOptions.filter(
-    (model) => !("isCustom" in model) || model.isCustom !== true,
-  );
-  const missingStaticBuiltIns =
-    (input.provider === "kilo" || input.provider === "opencode" || input.provider === "cursor") &&
-    normalizedDynamicOptions.length > 0
-      ? []
-      : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
-
-  const orderedDynamicOptions =
-    input.provider === "claudeAgent"
-      ? normalizedDynamicOptions.toReversed()
-      : normalizedDynamicOptions;
-
-  return [...orderedDynamicOptions, ...missingStaticBuiltIns, ...customOnlyModels];
-}
-
-function skillMentionPrefix(provider: string): string {
-  if (provider === "pi") return "/skill:";
-  return "/";
-}
-
-const providerMentionReferencesEqual = (
-  left: ReadonlyArray<ProviderMentionReference>,
-  right: ReadonlyArray<ProviderMentionReference>,
-): boolean =>
-  left.length === right.length &&
-  left.every(
-    (mention, index) => mention.path === right[index]?.path && mention.name === right[index]?.name,
-  );
-
-const syncTerminalContextsByIds = (
-  contexts: ReadonlyArray<TerminalContextDraft>,
-  ids: ReadonlyArray<string>,
-): TerminalContextDraft[] => {
-  const contextsById = new Map(contexts.map((context) => [context.id, context]));
-  return ids.flatMap((id) => {
-    const context = contextsById.get(id);
-    return context ? [context] : [];
-  });
-};
-
-const terminalContextIdListsEqual = (
-  contexts: ReadonlyArray<TerminalContextDraft>,
-  ids: ReadonlyArray<string>,
-): boolean =>
-  contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index]);
-
-function ComposerControlSkeleton(props: { widthClassName: string }) {
-  return (
-    <div
-      aria-hidden="true"
-      className={cn(
-        "flex h-8 shrink-0 items-center rounded-md border border-border/50 px-2",
-        props.widthClassName,
-      )}
-    >
-      <Skeleton className="h-3.5 w-full rounded-full" />
-    </div>
-  );
-}
-
-function ComposerModelLoadingControl(props: { widthClassName: string }) {
-  return (
-    <div
-      aria-label="Loading models"
-      className={cn(
-        "flex h-8 shrink-0 items-center gap-2 rounded-md border border-border/50 px-2 text-muted-foreground",
-        props.widthClassName,
-      )}
-    >
-      <RefreshCwIcon aria-hidden="true" className="size-3.5 animate-spin" />
-      <span className="truncate text-[length:var(--app-font-size-ui-xs,11px)]">Loading models</span>
-    </div>
-  );
-}
+import {
+  ATTACHMENT_PREVIEW_HANDOFF_TTL_MS,
+  buildQueuedComposerPreviewText,
+  canHandleComposerPickerShortcut,
+  COMPOSER_PATH_QUERY_DEBOUNCE_MS,
+  ComposerControlSkeleton,
+  ComposerModelLoadingControl,
+  EMPTY_ACTIVITIES,
+  EMPTY_AVAILABLE_EDITORS,
+  EMPTY_COMPOSER_PLUGIN_SUGGESTIONS,
+  EMPTY_COMPOSER_SUGGESTIONS,
+  EMPTY_KEYBINDINGS,
+  EMPTY_MESSAGES,
+  EMPTY_PENDING_USER_INPUT_ANSWERS,
+  EMPTY_PINNED_MESSAGES,
+  EMPTY_PINNED_TEXT,
+  EMPTY_PROJECT_ENTRIES,
+  EMPTY_PROVIDER_NATIVE_COMMANDS,
+  EMPTY_PROVIDER_SKILLS,
+  EMPTY_PROVIDER_STATUSES,
+  EMPTY_THREAD_MARKERS,
+  eventTargetsComposer,
+  formatOutgoingPrompt,
+  getConfirmedCustomBinarySessionKey,
+  getProviderHealthBannerDismissalKey,
+  getProviderStartOptionsCustomBinaryPath,
+  getRateLimitBannerDismissalKey,
+  getThreadProviderCustomBinaryPathKey,
+  IMAGE_SIZE_LIMIT_LABEL,
+  MAX_DISMISSED_PROVIDER_HEALTH_BANNERS,
+  providerMentionReferencesEqual,
+  revokeBlobPreviewUrlsAfterPaint,
+  selectEmptyComposerSuggestionThreads,
+  skillMentionPrefix,
+  syncTerminalContextsByIds,
+  terminalContextIdListsEqual,
+  VOICE_RECORDER_ACTION_ARM_DELAY_MS,
+  warnVoiceGuard,
+} from "./ChatView.helpers";
+import { useProviderModelOptions } from "./ChatView.modelOptions";
 
 interface ChatViewProps {
   threadId: ThreadId;
@@ -1186,12 +861,22 @@ export default function ChatView({
   const activeThreadId = activeThread?.id ?? null;
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
-  const hasLiveTurnTail = hasLiveTurnTailWork({
-    latestTurn: activeLatestTurn,
-    messages: activeThread?.messages ?? EMPTY_MESSAGES,
-    activities: threadActivities,
-    session: activeThread?.session ?? null,
-  });
+  // Sort once per activities change so derive* functions and hasLiveTurnTailWork
+  // all share the same sorted array instead of each re-sorting independently.
+  const sortedThreadActivities = useMemo(
+    () => sortActivitiesByOrder(threadActivities),
+    [threadActivities],
+  );
+  const hasLiveTurnTail = useMemo(
+    () =>
+      hasLiveTurnTailWork({
+        latestTurn: activeLatestTurn,
+        messages: activeThread?.messages ?? EMPTY_MESSAGES,
+        sortedActivities: sortedThreadActivities,
+        session: activeThread?.session ?? null,
+      }),
+    [activeLatestTurn, activeThread?.messages, activeThread?.session, sortedThreadActivities],
+  );
   const activeContextWindow = useMemo(
     () => deriveLatestContextWindowSnapshot(threadActivities),
     [threadActivities],
@@ -1415,397 +1100,49 @@ export default function ChatView({
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   voiceThreadIdRef.current = threadId;
   voiceProviderRef.current = selectedProvider;
-  const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
   const featureFlags = useFeatureFlags();
   const showExpandedCursorModelVariants = featureFlags["show-expanded-cursor-model-variants"];
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
-  const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
-    const threadModelSelection = activeThread?.modelSelection ?? null;
-    const projectModelSelection = activeProject?.defaultModelSelection ?? null;
-    const draftSelections = composerDraft.modelSelectionByProvider;
-
-    const resolveHint = (provider: ProviderKind): string | null =>
-      draftSelections[provider]?.model ??
-      (threadModelSelection?.provider === provider ? threadModelSelection.model : null) ??
-      (projectModelSelection?.provider === provider ? projectModelSelection.model : null);
-
-    return {
-      codex: resolveHint("codex"),
-      claudeAgent: resolveHint("claudeAgent"),
-      cursor: resolveHint("cursor"),
-      gemini: resolveHint("gemini"),
-      grok: resolveHint("grok"),
-      kilo: resolveHint("kilo"),
-      opencode: resolveHint("opencode"),
-      pi: resolveHint("pi"),
-    };
-  }, [
-    activeProject?.defaultModelSelection,
-    activeThread?.modelSelection,
-    composerDraft.modelSelectionByProvider,
-  ]);
-  const claudeDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({ provider: "claudeAgent" }),
-  );
-  const codexDynamicModelsQuery = useQuery(providerModelsQueryOptions({ provider: "codex" }));
-  const openCodeModelDiscoveryEnabled =
-    selectedProvider === "opencode" || lockedProvider === "opencode" || isModelPickerOpen;
-  const kiloModelDiscoveryEnabled =
-    selectedProvider === "kilo" || lockedProvider === "kilo" || isModelPickerOpen;
-  const cursorDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "cursor",
-      binaryPath: settings.cursorBinaryPath || null,
-      apiEndpoint: settings.cursorApiEndpoint || null,
-      enabled: selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen,
-    }),
-  );
-  const geminiModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "gemini",
-      binaryPath: settings.geminiBinaryPath || null,
-      enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
-    }),
-  );
-  const grokDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "grok",
-      binaryPath: settings.grokBinaryPath || null,
-      enabled: selectedProvider === "grok" || lockedProvider === "grok" || isModelPickerOpen,
-    }),
-  );
-  const openCodeDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "opencode",
-      binaryPath: settings.openCodeBinaryPath || null,
-      enabled: openCodeModelDiscoveryEnabled,
-    }),
-  );
-  const kiloDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "kilo",
-      binaryPath: settings.kiloBinaryPath || null,
-      enabled: kiloModelDiscoveryEnabled,
-    }),
-  );
-  const piDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "pi",
-      binaryPath: settings.piBinaryPath || null,
-      agentDir: settings.piAgentDir || null,
-      enabled: selectedProvider === "pi" || lockedProvider === "pi" || isModelPickerOpen,
-    }),
-  );
-  const claudeDynamicAgentsQuery = useQuery(
-    providerAgentsQueryOptions({ provider: "claudeAgent" }),
-  );
-  const codexDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "codex" }));
-  const openCodeDynamicAgentsQuery = useQuery(
-    providerAgentsQueryOptions({ provider: "opencode", enabled: openCodeModelDiscoveryEnabled }),
-  );
-  const kiloDynamicAgentsQuery = useQuery(
-    providerAgentsQueryOptions({ provider: "kilo", enabled: kiloModelDiscoveryEnabled }),
-  );
-  const cursorRuntimeModels = useMemo(
-    () =>
-      showExpandedCursorModelVariants
-        ? (cursorDynamicModelsQuery.data?.models ?? [])
-        : collapseCursorModelVariants(cursorDynamicModelsQuery.data?.models ?? []),
-    [cursorDynamicModelsQuery.data?.models, showExpandedCursorModelVariants],
-  );
-  const cursorModelDiscoveryEnabled =
-    selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen;
-  const hasResolvedCursorModelDiscovery =
-    cursorDynamicModelsQuery.data?.source === "cursor.cli" &&
-    (cursorDynamicModelsQuery.data.models.length ?? 0) > 0;
-  const cursorModelDiscoveryPending =
-    cursorModelDiscoveryEnabled &&
-    !hasResolvedCursorModelDiscovery &&
-    (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
-  const hasResolvedKiloModelDiscovery =
-    (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
-      kiloDynamicModelsQuery.data?.source === "kilo") &&
-    (kiloDynamicModelsQuery.data.models.length ?? 0) > 0;
-  const kiloModelDiscoveryPending =
-    kiloModelDiscoveryEnabled &&
-    !hasResolvedKiloModelDiscovery &&
-    (kiloDynamicModelsQuery.isLoading || kiloDynamicModelsQuery.isFetching);
-  const modelOptionsByProvider = useMemo(() => {
-    const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
-      codex: getAppModelOptions(
-        "codex",
-        customModelsByProvider.codex,
-        composerModelHintByProvider.codex,
-      ),
-      claudeAgent: getAppModelOptions(
-        "claudeAgent",
-        customModelsByProvider.claudeAgent,
-        composerModelHintByProvider.claudeAgent,
-      ),
-      cursor: getAppModelOptions(
-        "cursor",
-        customModelsByProvider.cursor,
-        composerModelHintByProvider.cursor,
-      ),
-      gemini: getAppModelOptions(
-        "gemini",
-        customModelsByProvider.gemini,
-        composerModelHintByProvider.gemini,
-      ),
-      grok: getAppModelOptions(
-        "grok",
-        customModelsByProvider.grok,
-        composerModelHintByProvider.grok,
-      ),
-      kilo: getAppModelOptions(
-        "kilo",
-        customModelsByProvider.kilo,
-        composerModelHintByProvider.kilo,
-      ),
-      opencode: getAppModelOptions(
-        "opencode",
-        customModelsByProvider.opencode,
-        composerModelHintByProvider.opencode,
-      ),
-      pi: getAppModelOptions("pi", customModelsByProvider.pi, composerModelHintByProvider.pi),
-    };
-    const result: Record<
-      ProviderKind,
-      ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
-    > = { ...staticOptions };
-
-    const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
-      claudeAgent: claudeDynamicModelsQuery.data,
-      codex: codexDynamicModelsQuery.data,
-      cursor:
-        cursorDynamicModelsQuery.data === undefined
-          ? undefined
-          : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
-      gemini: geminiModelsQuery.data,
-      grok: grokDynamicModelsQuery.data,
-      kilo: kiloDynamicModelsQuery.data,
-      opencode: openCodeDynamicModelsQuery.data,
-      pi: piDynamicModelsQuery.data,
-    };
-
-    for (const provider of [
-      "claudeAgent",
-      "codex",
-      "cursor",
-      "gemini",
-      "grok",
-      "kilo",
-      "opencode",
-      "pi",
-    ] as const) {
-      const dynamicModels = dynamicSources[provider]?.models;
-      if (dynamicModels && dynamicModels.length > 0) {
-        result[provider] = mergeDynamicModelOptions({
-          provider,
-          staticOptions: staticOptions[provider],
-          dynamicModels: dynamicModels.map((model) => ({
-            slug: model.slug,
-            ...(model.name !== undefined ? { name: model.name } : {}),
-            ...(model.upstreamProviderId !== undefined
-              ? { upstreamProviderId: model.upstreamProviderId }
-              : {}),
-            ...(model.upstreamProviderName !== undefined
-              ? { upstreamProviderName: model.upstreamProviderName }
-              : {}),
-          })),
-        });
-      }
-    }
-
-    return result;
-  }, [
-    claudeDynamicModelsQuery.data,
-    composerModelHintByProvider,
-    codexDynamicModelsQuery.data,
-    cursorDynamicModelsQuery.data,
-    cursorRuntimeModels,
+  const {
     customModelsByProvider,
-    geminiModelsQuery.data,
-    grokDynamicModelsQuery.data,
-    kiloDynamicModelsQuery.data,
-    openCodeDynamicModelsQuery.data,
-    piDynamicModelsQuery.data,
-  ]);
-  const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
+    claudeDynamicAgentsQuery,
+    codexDynamicAgentsQuery,
+    openCodeDynamicAgentsQuery,
+    kiloDynamicAgentsQuery,
+    cursorModelDiscoveryPending,
+    kiloModelDiscoveryPending,
+    modelOptionsByProvider,
+    composerModelOptions,
+    selectedModel,
+    runtimeModelsByProvider,
+    selectedRuntimeModel,
+    composerProviderState,
+    selectedModelSelection,
+    providerOptionsForDispatch,
+    selectedModelForPickerWithCustomFallback,
+    selectedProviderRuntimeModelDiscoveryPending,
+    showComposerModelBootstrapSkeleton,
+    searchableModelOptions,
+  } = useProviderModelOptions({
     threadId,
+    settings,
     selectedProvider,
+    lockedProvider,
+    sessionProvider,
+    isModelPickerOpen,
+    showExpandedCursorModelVariants,
     threadModelSelection: activeThread?.modelSelection,
     projectModelSelection: activeProject?.defaultModelSelection,
-    customModelsByProvider,
-    availableModelOptionsByProvider: modelOptionsByProvider,
+    draftModelSelectionByProvider: composerDraft.modelSelectionByProvider,
+    prompt,
   });
-  const runtimeModelsByProvider = useMemo(
-    () => ({
-      claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
-      codex: codexDynamicModelsQuery.data?.models ?? [],
-      cursor: cursorRuntimeModels,
-      gemini: geminiModelsQuery.data?.models ?? [],
-      grok: grokDynamicModelsQuery.data?.models ?? [],
-      kilo: kiloDynamicModelsQuery.data?.models ?? [],
-      opencode: openCodeDynamicModelsQuery.data?.models ?? [],
-      pi: piDynamicModelsQuery.data?.models ?? [],
-    }),
-    [
-      claudeDynamicModelsQuery.data?.models,
-      codexDynamicModelsQuery.data?.models,
-      cursorRuntimeModels,
-      geminiModelsQuery.data?.models,
-      grokDynamicModelsQuery.data?.models,
-      kiloDynamicModelsQuery.data?.models,
-      openCodeDynamicModelsQuery.data?.models,
-      piDynamicModelsQuery.data?.models,
-    ],
-  );
-  const providerModelsQueryByProvider = {
-    claudeAgent: claudeDynamicModelsQuery,
-    codex: codexDynamicModelsQuery,
-    cursor: cursorDynamicModelsQuery,
-    gemini: geminiModelsQuery,
-    grok: grokDynamicModelsQuery,
-    kilo: kiloDynamicModelsQuery,
-    opencode: openCodeDynamicModelsQuery,
-    pi: piDynamicModelsQuery,
-  } as const;
-  const selectedRuntimeModel = useMemo(
-    () =>
-      resolveRuntimeModelDescriptor({
-        provider: selectedProvider,
-        model: selectedModel,
-        runtimeModels: runtimeModelsByProvider[selectedProvider],
-      }),
-    [runtimeModelsByProvider, selectedModel, selectedProvider],
-  );
-  const composerProviderState = useMemo(
-    () =>
-      getComposerProviderState({
-        provider: selectedProvider,
-        model: selectedModel,
-        runtimeModel: selectedRuntimeModel,
-        prompt,
-        modelOptions: composerModelOptions,
-      }),
-    [composerModelOptions, prompt, selectedModel, selectedProvider, selectedRuntimeModel],
-  );
   const selectedPromptEffort = composerProviderState.promptEffort;
-  const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
-  const draftModelSelectionForSelectedProvider =
-    composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
-  const selectedModelSelection = useMemo<ModelSelection>(() => {
-    if (selectedProvider === "pi" && draftModelSelectionForSelectedProvider?.provider === "pi") {
-      return buildModelSelection(
-        selectedProvider,
-        draftModelSelectionForSelectedProvider.model,
-        selectedModelOptionsForDispatch ?? draftModelSelectionForSelectedProvider.options,
-      );
-    }
-    return buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch);
-  }, [
-    draftModelSelectionForSelectedProvider,
-    selectedModel,
-    selectedModelOptionsForDispatch,
-    selectedProvider,
-  ]);
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
-  const selectedModelForPicker =
-    selectedModelSelection.provider === selectedProvider
-      ? selectedModelSelection.model
-      : selectedModel;
-  const selectedModelForPickerWithCustomFallback = useMemo(() => {
-    const currentOptions = modelOptionsByProvider[selectedProvider];
-    return currentOptions.some((option) => option.slug === selectedModelForPicker)
-      ? selectedModelForPicker
-      : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
-  }, [modelOptionsByProvider, selectedModelForPicker, selectedProvider]);
-  const persistedComposerModelSelection =
-    sessionProvider && activeThread?.modelSelection.provider !== sessionProvider
-      ? activeProject?.defaultModelSelection?.provider === selectedProvider
-        ? activeProject.defaultModelSelection
-        : null
-      : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
-  const selectedProviderModelsQuery = providerModelsQueryByProvider[selectedProvider];
-  const providerModelsLoading =
-    selectedProvider === "cursor"
-      ? cursorModelDiscoveryPending
-      : selectedProvider === "kilo"
-        ? kiloModelDiscoveryPending
-        : selectedProviderModelsQuery !== undefined &&
-          (selectedProviderModelsQuery.isLoading ||
-            (selectedProviderModelsQuery.isFetching &&
-              selectedProviderModelsQuery.data === undefined));
-  const selectedProviderRequiresRuntimeModels =
-    selectedProvider === "cursor" || selectedProvider === "kilo";
-  const selectedProviderRuntimeModelDiscoveryPending =
-    selectedProvider === "cursor"
-      ? cursorModelDiscoveryPending
-      : selectedProvider === "kilo"
-        ? kiloModelDiscoveryPending
-        : false;
-  const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
-    selectedProvider,
-    selectedModel,
-    persistedModelSelection: persistedComposerModelSelection,
-    draftModelSelection: draftModelSelectionForSelectedProvider,
-    providerModelsLoading,
-    requiresDiscoveredModels: selectedProviderRequiresRuntimeModels,
-  });
-  const hiddenProviderSet = useMemo(
-    () => new Set<ProviderKind>(settings.hiddenProviders),
-    [settings.hiddenProviders],
-  );
-  const searchableModelOptions = useMemo(
-    () =>
-      [...AVAILABLE_PROVIDER_OPTIONS]
-        .sort((left, right) =>
-          compareProvidersByOrder(settings.providerOrder, left.value, right.value),
-        )
-        .filter((option) => {
-          if (lockedProvider !== null) {
-            return option.value === lockedProvider;
-          }
-          // Always keep the currently selected provider visible in search even if
-          // it's hidden in the picker, so the user can still see and switch from
-          // its models without first unhiding the provider in settings.
-          if (option.value === selectedProvider) {
-            return true;
-          }
-          return !hiddenProviderSet.has(option.value);
-        })
-        .flatMap((option) =>
-          modelOptionsByProvider[option.value].map(
-            ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
-              provider: option.value,
-              providerLabel: option.label,
-              slug,
-              name,
-              searchSlug: slug.toLowerCase(),
-              searchName: name.toLowerCase(),
-              searchProvider: option.label.toLowerCase(),
-              searchUpstreamProvider: (
-                upstreamProviderName ??
-                upstreamProviderId ??
-                ""
-              ).toLowerCase(),
-            }),
-          ),
-        ),
-    [
-      hiddenProviderSet,
-      lockedProvider,
-      modelOptionsByProvider,
-      selectedProvider,
-      settings.providerOrder,
-    ],
-  );
   const phase = derivePhase(activeThread?.session ?? null);
   const isConnecting = isLocalConnecting || phase === "connecting";
   const rawWorkLogEntries = useMemo(
-    () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities, WORK_LOG_PRESENTATION_VERSION],
+    () =>
+      deriveWorkLogEntriesFromSorted(sortedThreadActivities, activeLatestTurn?.turnId ?? undefined),
+    [activeLatestTurn?.turnId, sortedThreadActivities],
   );
   const hasWorkLogSubagents = useMemo(
     () => rawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
@@ -1850,12 +1187,12 @@ export default function ChatView({
     }
   }, [agentActivityTimelineState.detailById, openAgentActivityId]);
   const pendingApprovals = useMemo(
-    () => derivePendingApprovals(threadActivities),
-    [threadActivities],
+    () => derivePendingApprovalsFromSorted(sortedThreadActivities),
+    [sortedThreadActivities],
   );
   const pendingUserInputs = useMemo(
-    () => derivePendingUserInputs(threadActivities),
-    [threadActivities],
+    () => derivePendingUserInputsFromSorted(sortedThreadActivities),
+    [sortedThreadActivities],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingDraftAnswers = useMemo(
@@ -1972,14 +1309,20 @@ export default function ChatView({
 
     return latestTurnSettled
       ? null
-      : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId ?? undefined);
-  }, [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, threadActivities]);
+      : deriveActiveTaskListStateFromSorted(
+          sortedThreadActivities,
+          activeLatestTurn?.turnId ?? undefined,
+        );
+  }, [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, sortedThreadActivities]);
   const activeBackgroundTasks = useMemo(
     () =>
       latestTurnSettled
         ? null
-        : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
+        : deriveActiveBackgroundTasksStateFromSorted(
+            sortedThreadActivities,
+            activeLatestTurn?.turnId ?? undefined,
+          ),
+    [activeLatestTurn?.turnId, latestTurnSettled, sortedThreadActivities],
   );
   useLayoutEffect(() => {
     if (!activeTaskList || planSidebarOpen) {
@@ -8682,15 +8025,17 @@ export default function ChatView({
                   : "pointer-events-none translate-y-1 opacity-0",
               )}
             >
-              <ThreadTerminalDrawer
-                key={`${activeThread.id}-workspace`}
-                {...terminalDrawerProps}
-                presentationMode="workspace"
-                isVisible={terminalWorkspaceTerminalTabActive}
-                onTogglePresentationMode={
-                  terminalState.workspaceLayout === "both" ? collapseTerminalWorkspace : undefined
-                }
-              />
+              <Suspense fallback={null}>
+                <ThreadTerminalDrawer
+                  key={`${activeThread.id}-workspace`}
+                  {...terminalDrawerProps}
+                  presentationMode="workspace"
+                  isVisible={terminalWorkspaceTerminalTabActive}
+                  onTogglePresentationMode={
+                    terminalState.workspaceLayout === "both" ? collapseTerminalWorkspace : undefined
+                  }
+                />
+              </Suspense>
             </div>
           ) : null}
 
@@ -8731,12 +8076,14 @@ export default function ChatView({
           return null;
         }
         return (
-          <ThreadTerminalDrawer
-            key={activeThread.id}
-            {...terminalDrawerProps}
-            presentationMode="drawer"
-            onTogglePresentationMode={expandTerminalWorkspace}
-          />
+          <Suspense fallback={null}>
+            <ThreadTerminalDrawer
+              key={activeThread.id}
+              {...terminalDrawerProps}
+              presentationMode="drawer"
+              onTogglePresentationMode={expandTerminalWorkspace}
+            />
+          </Suspense>
         );
       })()}
 

@@ -25,22 +25,16 @@ export default defineConfig({
     tanstackRouter(),
     react(),
     babel({
-      // We need to be explicit about the parser options after moving to @vitejs/plugin-react v6.0.0
-      // This is because the babel plugin only automatically parses typescript and jsx based on relative paths (e.g. "**/*.ts")
-      // whereas the previous version of the plugin parsed all files with a .ts extension.
-      // This is causing our packages/ directory to fail to parse, as they are not relative to the CWD.
+      // Scope the React Compiler to web app sources only — packages/ has no React components
+      // and emits a PLUGIN_TIMINGS warning when babel processes them unnecessarily.
+      include: /\/apps\/web\/src\/.*\.[jt]sx?$/,
       parserOpts: { plugins: ["typescript", "jsx"] },
       presets: [reactCompilerPreset()],
     }),
     tailwindcss(),
   ],
   optimizeDeps: {
-    include: [
-      "@pierre/diffs",
-      "@pierre/diffs/react",
-      "@pierre/diffs/worker/worker.js",
-      "react-icons/gr",
-    ],
+    include: ["@pierre/diffs", "@pierre/diffs/react", "@pierre/diffs/worker/worker.js"],
   },
   define: {
     // In dev mode, tell the web app where the WebSocket server lives
@@ -65,5 +59,48 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     sourcemap: buildSourcemap,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              // Vite's dynamic-import preload helper ("\0vite/preload-helper.js") is
+              // shared by the entry and every lazy chunk; without a dedicated home
+              // rolldown merges it into vendor-diffs, dragging that chunk back into
+              // the eager entry graph.
+              name: "preload-helper",
+              test: /[\\/]preload-helper\.js/,
+              priority: 11,
+            },
+            { name: "vendor-effect", test: /[\\/]node_modules[\\/]effect[\\/]/, priority: 10 },
+            { name: "vendor-xterm", test: /[\\/]node_modules[\\/]@xterm[\\/]/, priority: 10 },
+            {
+              name: "vendor-lexical",
+              test: /[\\/]node_modules[\\/](?:lexical|@lexical)[\\/]/,
+              priority: 10,
+            },
+            {
+              name: "vendor-react",
+              test: /[\\/]node_modules[\\/](?:react|react-dom)[\\/]/,
+              priority: 10,
+            },
+            { name: "vendor-tanstack", test: /[\\/]node_modules[\\/]@tanstack[\\/]/, priority: 9 },
+            {
+              // Claims the eagerly-loaded markdown/HAST ecosystem (react-markdown +
+              // unified/micromark closure). Without an explicit group, rolldown hoists
+              // the utilities shared with lazy shiki/diff code (property-information,
+              // *-separated-tokens, ccount, hast-util-whitespace, zwitch) into
+              // vendor-diffs, which forces that chunk into the eager entry graph.
+              // hast-util-to-html and its private deps are intentionally excluded:
+              // they are lazy-only and must stay out of the eager chunk.
+              name: "vendor-markdown",
+              test: /[\\/]node_modules[\\/](?:react-markdown|remark-[a-z-]+|rehype-[a-z-]+|micromark(?:-[a-z-]+)?|mdast-util-[a-z-]+|hast-util-(?:from-dom|from-html-isomorphic|is-element|parse-selector|to-jsx-runtime|to-text|whitespace)|hastscript|unist-util-[a-z-]+|unified|vfile(?:-message)?|bail|trough|devlop|zwitch|ccount|longest-streak|markdown-table|trim-lines|extend|is-plain-obj|escape-string-regexp|decode-named-character-reference|estree-util-is-identifier-name|comma-separated-tokens|space-separated-tokens|property-information|html-url-attributes|style-to-(?:js|object)|inline-style-parser|web-namespaces|@ungap[\\/]structured-clone)[\\/]/,
+              priority: 9,
+            },
+            { name: "vendor-diffs", test: /[\\/]node_modules[\\/]@pierre[\\/]/, priority: 9 },
+          ],
+        },
+      },
+    },
   },
 });

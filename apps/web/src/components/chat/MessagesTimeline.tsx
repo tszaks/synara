@@ -161,6 +161,39 @@ const AgentTaskIcon: LucideIcon = (props) => (
   <RiRobot3Line className={props.className} style={props.style} />
 );
 
+// createdAt is immutable; cache formatted timestamps to avoid re-allocating a
+// Date object every time a row is rendered. Keyed by `${isoDate}:${format}`.
+const shortTimestampCache = new Map<string, string>();
+
+// TurnDiffSummary is structurally shared via useStableRows; cache the derived
+// Map so it isn't rebuilt on every row render when the summary is unchanged.
+const fileDiffStatCache = new WeakMap<
+  TurnDiffSummary,
+  ReadonlyMap<string, { additions: number; deletions: number }>
+>();
+function getFileDiffStatByPath(
+  turnSummary: TurnDiffSummary,
+): ReadonlyMap<string, { additions: number; deletions: number }> {
+  const cached = fileDiffStatCache.get(turnSummary);
+  if (cached !== undefined) return cached;
+  const result = new Map(
+    turnSummary.files.map((file) => [
+      file.path,
+      { additions: file.additions ?? 0, deletions: file.deletions ?? 0 },
+    ]),
+  );
+  fileDiffStatCache.set(turnSummary, result);
+  return result;
+}
+function cachedFormatShortTimestamp(isoDate: string, format: TimestampFormat): string {
+  const key = `${isoDate}:${format}`;
+  const cached = shortTimestampCache.get(key);
+  if (cached !== undefined) return cached;
+  const result = formatShortTimestamp(isoDate, format);
+  shortTimestampCache.set(key, result);
+  return result;
+}
+
 const DEFAULT_AGENT_COLOR = { bg: "rgb(245 158 11 / 0.15)", text: "rgb(245 158 11)" };
 const AGENT_COLOR_STYLES: Record<string, { bg: string; text: string }> = {
   violet: { bg: "rgb(139 92 246 / 0.15)", text: "rgb(139 92 246)" },
@@ -624,27 +657,25 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }, [clearTailExpansionScrollTimers, resolvedListRef]);
   useEffect(() => clearTailExpansionScrollTimers, [clearTailExpansionScrollTimers]);
   const ignoreTimelineImageLoad = useCallback(() => {}, []);
-  const latestEditableUserMessageId = useMemo(() => {
-    const messages = rows.flatMap((row) => (row.kind === "message" ? [row.message] : []));
-    const editTarget = resolveLatestTailUserMessageEditTarget({
-      messages,
-      activeTurnId,
-    });
-    return editTarget.editable ? (editTarget.messageId as MessageId) : null;
-  }, [activeTurnId, rows]);
-  const userMessageIdByAssistantMessageId = useMemo(() => {
-    const map = new Map<MessageId, MessageId>();
+  const { latestEditableUserMessageId, userMessageIdByAssistantMessageId } = useMemo(() => {
+    const messages: Extract<MessagesTimelineRow, { kind: "message" }>["message"][] = [];
+    const userByAssistant = new Map<MessageId, MessageId>();
     let lastUserMessageId: MessageId | null = null;
     for (const row of rows) {
       if (row.kind !== "message") continue;
+      messages.push(row.message);
       if (row.message.role === "user") {
         lastUserMessageId = row.message.id;
       } else if (row.message.role === "assistant" && lastUserMessageId) {
-        map.set(row.message.id, lastUserMessageId);
+        userByAssistant.set(row.message.id, lastUserMessageId);
       }
     }
-    return map;
-  }, [rows]);
+    const editTarget = resolveLatestTailUserMessageEditTarget({ messages, activeTurnId });
+    return {
+      latestEditableUserMessageId: editTarget.editable ? (editTarget.messageId as MessageId) : null,
+      userMessageIdByAssistantMessageId: userByAssistant,
+    };
+  }, [activeTurnId, rows]);
   const previousRowCountRef = useRef(rows.length);
   useEffect(() => {
     const previousRowCount = previousRowCountRef.current;
@@ -708,6 +739,31 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       }
     },
     [cancelUserMessageEdit, onEditUserMessage],
+  );
+
+  const renderItem = useCallback(
+    ({ item }: { item: MessagesTimelineRow }) => renderRowContent(item),
+    // renderRowContent captures all per-render state that also drives extraData;
+    // keeping this stable when extraData changes would require routing all values
+    // through extraData and reading them inside the renderer — a larger refactor.
+    // This useCallback at least prevents a fresh reference when unrelated state
+    // outside MessagesTimeline changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      expandedWorkGroupsState,
+      highlightedMessageId,
+      expandedCollapsedWork,
+      expandedFileChangesByTurnId,
+      expandedFileListByTurnId,
+      expandedUserMessagesById,
+      editingUserMessageId,
+      submittingEditedUserMessageId,
+      pinnedMessageIds,
+      threadMarkersByMessageId,
+      tailContentRowId,
+      latestEditableUserMessageId,
+      userMessageIdByAssistantMessageId,
+    ],
   );
 
   const renderRowContent = (row: MessagesTimelineRow) => (
@@ -916,7 +972,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     style={chatMessageFooterStyle}
                   >
                     <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                      {formatShortTimestamp(row.message.createdAt, timestampFormat)}
+                      {cachedFormatShortTimestamp(row.message.createdAt, timestampFormat)}
                     </p>
                     <div className="flex items-center gap-2">
                       {displayedUserMessage.copyText && (
@@ -996,15 +1052,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const showPinToggle =
             Boolean(onTogglePinMessage) && (assistantCopyState.visible || messagePinned);
           const turnSummary = row.assistantTurnDiffSummary;
-          const fileDiffStatByPath = new Map(
-            (turnSummary?.files ?? []).map((file) => [
-              file.path,
-              {
-                additions: file.additions ?? 0,
-                deletions: file.deletions ?? 0,
-              },
-            ]),
-          );
+          const fileDiffStatByPath = turnSummary
+            ? getFileDiffStatByPath(turnSummary)
+            : (new Map() as ReadonlyMap<string, { additions: number; deletions: number }>);
           const hasGenericInlineFileChangeEntry = inlineToolEntries.some(
             (workEntry) =>
               isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) === 0,
@@ -1028,7 +1078,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) > 0,
             );
           const assistantMeta = [
-            formatShortTimestamp(row.message.createdAt, timestampFormat),
+            cachedFormatShortTimestamp(row.message.createdAt, timestampFormat),
             inlineWorkSummary,
           ]
             .filter((value): value is string => Boolean(value))
@@ -1490,7 +1540,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         ref={resolvedListRef}
         data={rows}
         keyExtractor={(row) => row.id}
-        renderItem={({ item }) => renderRowContent(item)}
+        renderItem={renderItem}
         estimatedItemSize={90}
         // LegendList caches rendered rows, so every local expansion map that changes row content
         // has to be surfaced through extraData.

@@ -394,6 +394,17 @@ function collapseSettledTurns(
     }
   };
 
+  // First pass (backward): for each terminal assistant message that can be
+  // collapsed, compute the collapsed items and record which preceding row
+  // indices should be removed. We collect all removal indices up front so the
+  // second pass can eliminate them in O(n) with a single filter instead of
+  // O(n) splices inside an O(n) loop.
+  const removeIndices = new Set<number>();
+
+  // Work backward so that earlier terminals don't accidentally grab rows that
+  // already belong to a later (higher-index) terminal's fold group. We must
+  // skip indices already claimed by a later terminal, which is exactly what
+  // `removeIndices` tracks.
   for (let pass = rows.length - 1; pass >= 0; pass -= 1) {
     const row = rows[pass]!;
     if (row.kind !== "message" || row.message.role !== "assistant") continue;
@@ -416,6 +427,8 @@ function collapseSettledTurns(
     // user message boundary is the stable UI grouping point.
     const foldIndices: number[] = [];
     for (let scan = pass - 1; scan >= 0; scan -= 1) {
+      // Skip indices already claimed by a later terminal's fold group.
+      if (removeIndices.has(scan)) continue;
       const prev = rows[scan]!;
       if (prev.kind === "work") {
         foldIndices.push(scan);
@@ -432,6 +445,7 @@ function collapseSettledTurns(
       }
       break;
     }
+    // foldIndices is collected in descending order; reverse to chronological order.
     foldIndices.reverse();
 
     const collapsedItems: CollapsedTurnItem[] = [];
@@ -463,11 +477,22 @@ function collapseSettledTurns(
       delete row.inlineWorkEntries;
       delete row.inlineWorkGroupId;
 
-      for (const index of [...foldIndices].sort((a, b) => b - a)) {
-        rows.splice(index, 1);
+      for (const index of foldIndices) {
+        removeIndices.add(index);
       }
-      pass -= foldIndices.length;
     }
+  }
+
+  // Second pass: single O(n) filter to remove all folded rows at once.
+  if (removeIndices.size > 0) {
+    let write = 0;
+    for (let read = 0; read < rows.length; read += 1) {
+      if (!removeIndices.has(read)) {
+        rows[write] = rows[read]!;
+        write += 1;
+      }
+    }
+    rows.length = write;
   }
 }
 

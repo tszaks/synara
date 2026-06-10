@@ -10,6 +10,8 @@ import {
 import { DateTime, Effect, Exit, FileSystem, Layer, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
+import { resolveStaticBody, staticNotModifiedHeaders, staticOkHeaders } from "./staticAssetCache";
+
 import {
   ATTACHMENTS_ROUTE_PREFIX,
   normalizeAttachmentRelativePath,
@@ -506,13 +508,34 @@ const staticAndDevEffectRouteLayer = HttpRouter.add(
       .pipe(Effect.catch(() => Effect.succeed(null)));
     if (!fileInfo || fileInfo.type !== "File") {
       const indexPath = path.resolve(staticRoot, "index.html");
+      const indexInfo = yield* fileSystem
+        .stat(indexPath)
+        .pipe(Effect.catch(() => Effect.succeed(null)));
       const indexData = yield* fileSystem
         .readFile(indexPath)
         .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (!indexData) return HttpServerResponse.text("Not Found", { status: 404 });
-      return HttpServerResponse.uint8Array(indexData, {
+      if (!indexData || !indexInfo) return HttpServerResponse.text("Not Found", { status: 404 });
+      const acceptEncoding = request.headers["accept-encoding"] as string | undefined;
+      const ifNoneMatch = request.headers["if-none-match"] as string | undefined;
+      const resolved = resolveStaticBody({
+        absolutePath: indexPath,
+        relativePath: "index.html",
+        rawBytes: indexData,
+        sizeBytes: Number(indexInfo.size),
+        mtimeMs: indexInfo.mtime?.getTime() ?? 0,
+        acceptEncoding,
+        ifNoneMatch,
+      });
+      if (resolved.status === 304) {
+        return HttpServerResponse.empty({
+          status: 304,
+          headers: staticNotModifiedHeaders(resolved),
+        });
+      }
+      return HttpServerResponse.uint8Array(resolved.body!, {
         status: 200,
-        contentType: "text/html; charset=utf-8",
+        contentType: resolved.contentType,
+        headers: staticOkHeaders(resolved),
       });
     }
 
@@ -520,9 +543,24 @@ const staticAndDevEffectRouteLayer = HttpRouter.add(
       .readFile(filePath)
       .pipe(Effect.catch(() => Effect.succeed(null)));
     if (!data) return HttpServerResponse.text("Internal Server Error", { status: 500 });
-    return HttpServerResponse.uint8Array(data, {
+    const acceptEncoding = request.headers["accept-encoding"] as string | undefined;
+    const ifNoneMatch = request.headers["if-none-match"] as string | undefined;
+    const resolved = resolveStaticBody({
+      absolutePath: filePath,
+      relativePath,
+      rawBytes: data,
+      sizeBytes: Number(fileInfo.size),
+      mtimeMs: fileInfo.mtime?.getTime() ?? 0,
+      acceptEncoding,
+      ifNoneMatch,
+    });
+    if (resolved.status === 304) {
+      return HttpServerResponse.empty({ status: 304, headers: staticNotModifiedHeaders(resolved) });
+    }
+    return HttpServerResponse.uint8Array(resolved.body!, {
       status: 200,
-      contentType: Mime.getType(filePath) ?? "application/octet-stream",
+      contentType: resolved.contentType,
+      headers: staticOkHeaders(resolved),
     });
   }),
 );
@@ -642,6 +680,7 @@ export function createHttpRequestHandler({
 
         yield* serveStaticAsset({
           url,
+          req,
           respond,
           staticDir,
           fileSystem,
@@ -770,6 +809,7 @@ const serveAttachment = Effect.fn(function* (input: {
 
 const serveStaticAsset = Effect.fn(function* (input: {
   readonly url: URL;
+  readonly req: http.IncomingMessage;
   readonly respond: Respond;
   readonly staticDir: string;
   readonly fileSystem: FileSystem.FileSystem;
@@ -812,23 +852,45 @@ const serveStaticAsset = Effect.fn(function* (input: {
     }
   }
 
+  const acceptEncoding = input.req.headers["accept-encoding"] as string | undefined;
+  const ifNoneMatch = input.req.headers["if-none-match"] as string | undefined;
+
   const fileInfo = yield* input.fileSystem
     .stat(filePath)
     .pipe(Effect.catch(() => Effect.succeed(null)));
   if (!fileInfo || fileInfo.type !== "File") {
     const indexPath = input.path.resolve(staticRoot, "index.html");
+    const indexInfo = yield* input.fileSystem
+      .stat(indexPath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
     const indexData = yield* input.fileSystem
       .readFile(indexPath)
       .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!indexData) {
+    if (!indexData || !indexInfo) {
       input.respond(404, { "Content-Type": "text/plain" }, "Not Found");
       return;
     }
-    input.respond(200, { "Content-Type": "text/html; charset=utf-8" }, indexData);
+    const resolved = resolveStaticBody({
+      absolutePath: indexPath,
+      relativePath: "index.html",
+      rawBytes: indexData,
+      sizeBytes: Number(indexInfo.size),
+      mtimeMs: indexInfo.mtime ? Number(indexInfo.mtime) : 0,
+      acceptEncoding,
+      ifNoneMatch,
+    });
+    if (resolved.status === 304) {
+      input.respond(304, staticNotModifiedHeaders(resolved));
+      return;
+    }
+    input.respond(
+      200,
+      { "Content-Type": resolved.contentType, ...staticOkHeaders(resolved) },
+      resolved.body!,
+    );
     return;
   }
 
-  const contentType = Mime.getType(filePath) ?? "application/octet-stream";
   const data = yield* input.fileSystem
     .readFile(filePath)
     .pipe(Effect.catch(() => Effect.succeed(null)));
@@ -836,5 +898,22 @@ const serveStaticAsset = Effect.fn(function* (input: {
     input.respond(500, { "Content-Type": "text/plain" }, "Internal Server Error");
     return;
   }
-  input.respond(200, { "Content-Type": contentType }, data);
+  const resolved = resolveStaticBody({
+    absolutePath: filePath,
+    relativePath: staticRelativePath,
+    rawBytes: data,
+    sizeBytes: Number(fileInfo.size),
+    mtimeMs: fileInfo.mtime ? Number(fileInfo.mtime) : 0,
+    acceptEncoding,
+    ifNoneMatch,
+  });
+  if (resolved.status === 304) {
+    input.respond(304, staticNotModifiedHeaders(resolved));
+    return;
+  }
+  input.respond(
+    200,
+    { "Content-Type": resolved.contentType, ...staticOkHeaders(resolved) },
+    resolved.body!,
+  );
 });

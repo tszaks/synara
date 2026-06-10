@@ -18,13 +18,13 @@ function makePiModel(input: {
 }
 
 describe("getPiSupportedThinkingOptions", () => {
-  it("hides thinking controls for non-reasoning models", () => {
-    expect(getPiSupportedThinkingOptions(makePiModel({ reasoning: false }))).toEqual([]);
+  it("hides thinking controls for non-reasoning models", async () => {
+    expect(await getPiSupportedThinkingOptions(makePiModel({ reasoning: false }))).toEqual([]);
   });
 
-  it("advertises xhigh only when the concrete Pi model supports it", () => {
-    const withoutXHigh = getPiSupportedThinkingOptions(makePiModel({ reasoning: true }));
-    const withXHigh = getPiSupportedThinkingOptions(
+  it("advertises xhigh only when the concrete Pi model supports it", async () => {
+    const withoutXHigh = await getPiSupportedThinkingOptions(makePiModel({ reasoning: true }));
+    const withXHigh = await getPiSupportedThinkingOptions(
       makePiModel({ reasoning: true, thinkingLevelMap: { xhigh: "xhigh" } }),
     );
 
@@ -45,8 +45,8 @@ describe("getPiSupportedThinkingOptions", () => {
     ]);
   });
 
-  it("respects provider-level disabled thinking levels", () => {
-    const options = getPiSupportedThinkingOptions(
+  it("respects provider-level disabled thinking levels", async () => {
+    const options = await getPiSupportedThinkingOptions(
       makePiModel({
         reasoning: true,
         thinkingLevelMap: {

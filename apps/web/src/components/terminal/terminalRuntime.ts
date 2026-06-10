@@ -2,6 +2,8 @@
 // Purpose: Own the long-lived xterm runtime lifecycle behind the terminal runtime registry.
 // Layer: Terminal runtime infrastructure
 
+import "@xterm/xterm/css/xterm.css";
+
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
 import { ImageAddon } from "@xterm/addon-image";
@@ -241,7 +243,10 @@ function flushPendingWrites(entry: TerminalRuntimeEntry): void {
     entry.pendingWriteBytes = 0;
     return;
   }
-  const combined = entry.pendingWrites.map((write) => write.data).join("");
+  const combined =
+    entry.pendingWrites.length === 1
+      ? (entry.pendingWrites[0]?.data ?? "")
+      : entry.pendingWrites.map((write) => write.data).join("");
   const byteLength = entry.pendingWriteBytes;
   const queuedAt = entry.pendingWrites[0]?.queuedAt ?? performance.now();
   entry.pendingWrites.length = 0;
@@ -483,6 +488,22 @@ function startVisibilityRecovery(entry: TerminalRuntimeEntry): void {
 function stopVisibilityRecovery(entry: TerminalRuntimeEntry): void {
   entry.visibilityCleanup?.();
   entry.visibilityCleanup = null;
+}
+
+function attachThemeObserver(entry: TerminalRuntimeEntry): void {
+  if (!entry.themeObserver) return;
+  entry.themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["class", "style"],
+  });
+}
+
+function detachThemeObserver(entry: TerminalRuntimeEntry): void {
+  entry.themeObserver?.disconnect();
+  if (entry.themeRefreshFrame !== 0) {
+    window.cancelAnimationFrame(entry.themeRefreshFrame);
+    entry.themeRefreshFrame = 0;
+  }
 }
 
 function syncTheme(entry: TerminalRuntimeEntry): void {
@@ -993,10 +1014,9 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       syncTheme(entry);
     });
   });
-  entry.themeObserver.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ["class", "style"],
-  });
+  // Observer is attached on the visible transition (updateRuntimeViewState) and
+  // detached on the hidden transition, so hidden/parked terminals never contribute
+  // a rAF + callback on every <html> attribute mutation.
 
   entry.unsubscribeTerminalEvents = terminalEventDispatcher.subscribe(
     entry.threadId,
@@ -1168,6 +1188,10 @@ export function updateRuntimeViewState(
 
   if (entry.container) {
     if (nextViewState.isVisible && !wasVisible) {
+      // Attach the theme observer now and immediately sync to catch any theme
+      // changes that occurred while the terminal was hidden or parked.
+      attachThemeObserver(entry);
+      syncTheme(entry);
       maybeLoadWebglAddon(entry);
       applyInitialVisualResize(entry);
       ensureResizeObserver(entry);
@@ -1177,6 +1201,7 @@ export function updateRuntimeViewState(
       stopVisibilityRecovery(entry);
       disposeWebglAddon(entry);
       clearAttachDisposables(entry);
+      detachThemeObserver(entry);
     }
   }
 
@@ -1192,6 +1217,7 @@ export function detachRuntimeFromContainer(entry: TerminalRuntimeEntry): void {
   stopVisibilityRecovery(entry);
   disposeWebglAddon(entry);
   clearAttachDisposables(entry);
+  detachThemeObserver(entry);
   clearBackendResizeTimer(entry);
   entry.pendingResize = null;
   entry.lastSentResize = null;

@@ -977,7 +977,33 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const applyThreadShellSummariesProjection: ProjectorDefinition["apply"] = (event) =>
     Effect.gen(function* () {
       switch (event.type) {
-        case "thread.message-sent":
+        case "thread.message-sent": {
+          if (!shouldRefreshThreadShellSummary(event)) {
+            return;
+          }
+          // A user message-sent only advances latestUserMessageAt; the other
+          // summary fields (pending counts, proposed-plan flag) are unaffected.
+          // Apply a targeted update without loading all messages+activities.
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          const current = existingRow.value;
+          const incomingAt = event.payload.createdAt;
+          const nextLatestUserMessageAt =
+            current.latestUserMessageAt === null || incomingAt > current.latestUserMessageAt
+              ? incomingAt
+              : current.latestUserMessageAt;
+          yield* projectionThreadRepository.upsert({
+            ...current,
+            latestUserMessageAt: nextLatestUserMessageAt,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
@@ -993,6 +1019,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
+          // Revert/rollback events rewrite history; full reload required for
+          // correctness.  Approval/user-input and proposed-plan events require
+          // cross-table lookups that aren't trivially derivable from the payload.
           const nextRow = yield* withRefreshedThreadShellSummary({
             thread: {
               ...existingRow.value,
@@ -1024,6 +1053,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
+          // session-set changes latestTurnId which affects hasActionableProposedPlan;
+          // full reload required.
           const nextRow = yield* withRefreshedThreadShellSummary({
             thread: {
               ...existingRow.value,
@@ -1046,6 +1077,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
+          // turn-diff-completed changes latestTurnId which affects
+          // hasActionableProposedPlan; full reload required.
           const nextRow = yield* withRefreshedThreadShellSummary({
             thread: {
               ...existingRow.value,
