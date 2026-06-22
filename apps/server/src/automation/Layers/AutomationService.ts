@@ -1426,6 +1426,10 @@ export const AutomationServiceLive = Layer.effect(
         if (!turn || turn.turnId === null || turn.state === "pending" || turn.state === "running") {
           if (
             run.status === "waiting-for-approval" &&
+            // Symmetry with the entry guard above: only resume a waiting run if it
+            // still owns the thread's pending input. Otherwise an unrelated newer
+            // turn on the same thread could resurrect a run it no longer owns.
+            runTurnOwnsPendingInput(run, shell, turn) &&
             run.threadId &&
             run.messageId &&
             run.turnStartCommandId
