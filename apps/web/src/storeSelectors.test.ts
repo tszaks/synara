@@ -123,7 +123,7 @@ describe("thread shell route selectors", () => {
   it("keeps workspace metadata stable while streaming messages change", () => {
     const selectWorkspaceMetadata = createThreadWorkspaceMetadataSelector(threadIdA);
     const threadIds = [threadIdA];
-    const threadShellById = {
+    const threadShellById: Record<string, ThreadShell> = {
       [threadIdA]: {
         ...shellA,
         envMode: "worktree",

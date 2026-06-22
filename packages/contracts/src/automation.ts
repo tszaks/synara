@@ -206,14 +206,22 @@ export const AutomationDefinition = Schema.Struct({
   maxIterations: Schema.NullOr(PositiveInt),
   /** When true, a failed run disables the automation (stops a runaway loop). */
   stopOnError: Schema.Boolean,
-  /** Heartbeat-only natural language stop condition. Standalone runs ignore it for now. */
-  completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
+  /**
+   * Heartbeat-only natural language stop condition. Standalone runs ignore it for now.
+   *
+   * Defaulted-but-required on decode: applying `withDecodingDefault` directly to the
+   * value schema (rather than to `Schema.optional(...)`) keeps the encoded input
+   * optional — so old rows missing the field still decode — while making the decoded
+   * type required. Wrapping in `Schema.optional` first would leave the decoded type as
+   * `... | undefined`, which downstream consumers read as always-present.
+   */
+  completionPolicy: AutomationCompletionPolicy.pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_COMPLETION_POLICY),
   ),
   /** Increments whenever the persisted stop policy changes; run snapshots use it for stale checks. */
-  completionPolicyVersion: Schema.optional(NonNegativeInt).pipe(Schema.withDecodingDefault(() => 0)),
+  completionPolicyVersion: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 0)),
   /** Save time for the current completion policy; used only for legacy run snapshots. */
-  completionPolicyUpdatedAt: Schema.optional(AutomationIsoDateTime).pipe(
+  completionPolicyUpdatedAt: AutomationIsoDateTime.pipe(
     Schema.withDecodingDefault(() => "1970-01-01T00:00:00.000Z"),
   ),
   minimumIntervalSeconds: PositiveInt,
