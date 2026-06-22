@@ -418,7 +418,7 @@ export function buildAutomationIntentPrompt(input: {
       "- heartbeat means continue/report in the current thread on each run.",
       "- standalone means create independent scheduled runs.",
       "- Use the default unless the user clearly asks for the other behavior.",
-      "- Stop clauses are currently supported only for heartbeat automations; if mode is standalone, use completionPolicy {\"type\":\"none\"}.",
+      '- Stop clauses are currently supported only for heartbeat automations; if mode is standalone, use completionPolicy {"type":"none"}.',
       "",
       "User message:",
       limitSection(input.message, 16_000),
@@ -435,7 +435,7 @@ export function buildAutomationCompletionEvaluationPrompt(input: {
   readonly stopWhen: string;
   readonly runUserMessage: string;
   readonly runAssistantText: string;
-  readonly threadContext?: string;
+  readonly threadContext?: string | undefined;
 }) {
   return {
     prompt: [
