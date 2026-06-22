@@ -25,8 +25,8 @@ layer("automation migration", (it) => {
   it.effect("registers automation policy migration in the Synara lineage", () =>
     Effect.sync(() => {
       assert.deepStrictEqual(migrationEntries[migrationEntries.length - 1]?.slice(0, 2), [
-        47,
-        "AutomationCompletionPolicyVersion",
+        48,
+        "AutomationCompletionEvalIndex",
       ]);
     }),
   );
@@ -48,6 +48,7 @@ layer("automation migration", (it) => {
         "idx_automation_runs_recovery",
         "idx_automation_runs_project",
         "idx_automation_runs_thread",
+        "idx_automation_runs_completion_eval",
       ]);
       const policyColumns = yield* sql<{ readonly name: string }>`
         SELECT name FROM pragma_table_info('automation_definitions')
