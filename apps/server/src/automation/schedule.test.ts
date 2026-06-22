@@ -6,6 +6,22 @@ import {
   computeNextAutomationRunAtAfter,
 } from "./schedule.ts";
 
+// Render a UTC instant as "YYYY-MM-DD HH:MM" wall-clock in a timezone, so DST
+// assertions check the local wall time rather than a hardcoded UTC offset.
+function wallClockInZone(iso: string, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(iso));
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "??";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
 describe("computeNextAutomationRunAt", () => {
   it("returns null for manual schedules", () => {
     expect(computeNextAutomationRunAt({ type: "manual" }, "2026-06-16T10:00:00.000Z")).toBeNull();
@@ -68,6 +84,35 @@ describe("computeNextAutomationRunAt", () => {
         "2026-06-19T10:00:00.000Z",
       ),
     ).toBe("2026-06-22T09:30:00.000Z");
+  });
+
+  it("skips the spring-forward gap for timezone-aware daily schedules", () => {
+    // America/New_York springs forward 2026-03-08 02:00 -> 03:00, so 02:30 does
+    // not exist that day. The gap day must be skipped to the next real 02:30.
+    const next = computeNextAutomationRunAt(
+      { type: "daily", timeOfDay: "02:30", timezone: "America/New_York" },
+      "2026-03-08T05:00:00.000Z", // 2026-03-08 00:00 EST, before the missing slot
+    );
+    expect(next).not.toBeNull();
+    expect(wallClockInZone(next!, "America/New_York")).toBe("2026-03-09 02:30");
+  });
+
+  it("fires a fall-back duplicate hour exactly once per day", () => {
+    // America/New_York falls back 2026-11-01 02:00 -> 01:00, so 01:30 happens twice.
+    const first = computeNextAutomationRunAt(
+      { type: "daily", timeOfDay: "01:30", timezone: "America/New_York" },
+      "2026-11-01T04:00:00.000Z", // 2026-11-01 00:00 EDT, before either 01:30
+    );
+    expect(first).not.toBeNull();
+    expect(wallClockInZone(first!, "America/New_York")).toBe("2026-11-01 01:30");
+    // The occurrence after the first 01:30 is the next day, not the second 01:30
+    // on the fall-back day (no double fire within the duplicated hour).
+    const afterFirst = computeNextAutomationRunAt(
+      { type: "daily", timeOfDay: "01:30", timezone: "America/New_York" },
+      first!,
+    );
+    expect(afterFirst).not.toBeNull();
+    expect(wallClockInZone(afterFirst!, "America/New_York")).toBe("2026-11-02 01:30");
   });
 
   it("uses timezone-aware daily slots when timezone is present", () => {
@@ -194,6 +239,18 @@ describe("computeNextAutomationRunAtAfter", () => {
         "2026-06-16T10:00:00.000Z",
       ),
     ).toBe("2026-06-16T10:05:00.000Z");
+  });
+
+  it("coalesces more than a day of missed interval slots into one aligned slot", () => {
+    // Hourly interval anchored at midnight, process down ~30h. We must land on the
+    // first aligned slot after now (07:00 the next day), not replay ~30 backlog ticks.
+    expect(
+      computeNextAutomationRunAtAfter(
+        { type: "interval", everySeconds: 3_600 },
+        "2026-06-16T00:00:00.000Z",
+        "2026-06-17T06:15:00.000Z",
+      ),
+    ).toBe("2026-06-17T07:00:00.000Z");
   });
 
   it("lands exactly on the next slot boundary, not the missed one", () => {
