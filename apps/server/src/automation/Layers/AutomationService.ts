@@ -1550,7 +1550,16 @@ export const AutomationServiceLive = Layer.effect(
         Effect.flatMap((runs) =>
           Effect.forEach(
             runs,
-            (run) => reconcileActiveRun(run, isoNow()).pipe(Effect.catch(() => Effect.void)),
+            (run) =>
+              reconcileActiveRun(run, isoNow()).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("automation active-run reconcile failed", {
+                    automationId: run.automationId,
+                    runId: run.id,
+                    error: errorMessage(error),
+                  }),
+                ),
+              ),
             { concurrency: 1 },
           ),
         ),
@@ -1572,7 +1581,13 @@ export const AutomationServiceLive = Layer.effect(
                 return interruptRunForRecovery(run, now).pipe(
                   Effect.mapError(toServiceError("Failed to recover automation run.")),
                   Effect.asVoid,
-                  Effect.catch(() => Effect.void),
+                  Effect.catch((error) =>
+                    Effect.logWarning("automation orphaned-run recovery failed", {
+                      automationId: run.automationId,
+                      runId: run.id,
+                      error: errorMessage(error),
+                    }),
+                  ),
                 );
               }
               return projectionSnapshotQuery.getThreadShellById(threadId).pipe(
@@ -1596,7 +1611,13 @@ export const AutomationServiceLive = Layer.effect(
                         ),
                       ),
                 ),
-                Effect.catch(() => Effect.void),
+                Effect.catch((error) =>
+                  Effect.logWarning("automation pending-run recovery failed", {
+                    automationId: run.automationId,
+                    runId: run.id,
+                    error: errorMessage(error),
+                  }),
+                ),
               );
             },
             { concurrency: 1 },
@@ -1962,6 +1983,9 @@ export const AutomationServiceLive = Layer.effect(
           })
           .pipe(Effect.mapError(toServiceError("Failed to acquire automation scheduler lease.")));
         if (!acquired) {
+          // Another instance holds the scheduler lease. Expected under multi-instance;
+          // logged at debug so lease contention is observable without log noise.
+          yield* Effect.logDebug("automation scheduler lease not acquired", { ownerId });
           return [];
         }
 

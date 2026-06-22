@@ -456,6 +456,13 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
+  // NOTE: the manual-run dedup here (INSERT OR IGNORE + the `WHERE NOT EXISTS` active-run
+  // guard below) is not atomic on its own: two concurrent inserts for the same thread can
+  // both pass the NOT EXISTS check before either row lands. In practice manual `runNow`
+  // pre-checks `heartbeatThreadRunState` in AutomationService, and scheduled runs are
+  // deduped by the partial unique index on (automation_id, scheduled_for). A partial
+  // unique index on (thread_id) over active statuses would make this fully atomic, but
+  // must first be proven safe against standalone runs (which derive unique thread ids).
   const insertRun = SqlSchema.void({
     Request: AutomationRunDbRow,
     execute: (run) =>
