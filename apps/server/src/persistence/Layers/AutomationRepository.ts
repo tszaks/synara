@@ -719,6 +719,39 @@ const makeAutomationRepository = Effect.gen(function* () {
       `,
   });
 
+  // Writes a new result but carries the triage fields (archivedAt/unread) over
+  // from the existing row atomically, so a background completion evaluation can
+  // never clobber a concurrent user archive/mark-read. unread is round-tripped
+  // through json() so it stays a JSON boolean rather than the 0/1 json_extract
+  // yields.
+  const markRunCompletionResultRow = SqlSchema.void({
+    Request: MarkAutomationRunResultInput,
+    execute: ({ id, result, updatedAt }) =>
+      result === null
+        ? sql`
+            UPDATE automation_runs
+            SET result_json = NULL, updated_at = ${updatedAt}
+            WHERE run_id = ${id}
+          `
+        : sql`
+            UPDATE automation_runs
+            SET result_json = CASE
+                  WHEN result_json IS NULL THEN ${JSON.stringify(result)}
+                  ELSE json_set(
+                    json_set(
+                      ${JSON.stringify(result)},
+                      '$.archivedAt',
+                      json_extract(result_json, '$.archivedAt')
+                    ),
+                    '$.unread',
+                    json(CASE WHEN json_extract(result_json, '$.unread') = 0 THEN 'false' ELSE 'true' END)
+                  )
+                END,
+                updated_at = ${updatedAt}
+            WHERE run_id = ${id}
+          `,
+  });
+
   const markRunInterruptedRow = SqlSchema.void({
     Request: MarkAutomationRunInterruptedInput,
     execute: ({ id, turnId, finishedAt }) =>
@@ -1329,6 +1362,14 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunResult")),
     );
 
+  const markRunCompletionResult: AutomationRepositoryShape["markRunCompletionResult"] = (input) =>
+    markRunCompletionResultRow(input).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunCompletionResult:update")),
+      Effect.flatMap(() =>
+        requireRunById(input.id, "AutomationRepository.markRunCompletionResult"),
+      ),
+    );
+
   const markRunInterrupted: AutomationRepositoryShape["markRunInterrupted"] = (input) =>
     markRunInterruptedRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunInterrupted:update")),
@@ -1374,9 +1415,7 @@ const makeAutomationRepository = Effect.gen(function* () {
     (input) =>
       listRunsNeedingCompletionEvaluationRows(input).pipe(
         Effect.mapError(
-          toPersistenceSqlError(
-            "AutomationRepository.listRunsNeedingCompletionEvaluation:query",
-          ),
+          toPersistenceSqlError("AutomationRepository.listRunsNeedingCompletionEvaluation:query"),
         ),
         Effect.flatMap((rows) => Effect.forEach(rows, toRun, { concurrency: "unbounded" })),
       );
@@ -1460,14 +1499,15 @@ const makeAutomationRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("AutomationRepository.disableDefinition:update")),
     );
 
-  const disableDefinitionIfUnchanged: AutomationRepositoryShape["disableDefinitionIfUnchanged"] =
-    (input) =>
-      disableDefinitionIfUnchangedRow(input).pipe(
-        Effect.mapError(
-          toPersistenceSqlError("AutomationRepository.disableDefinitionIfUnchanged:update"),
-        ),
-        Effect.map((rows) => rows.length > 0),
-      );
+  const disableDefinitionIfUnchanged: AutomationRepositoryShape["disableDefinitionIfUnchanged"] = (
+    input,
+  ) =>
+    disableDefinitionIfUnchangedRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("AutomationRepository.disableDefinitionIfUnchanged:update"),
+      ),
+      Effect.map((rows) => rows.length > 0),
+    );
 
   const incrementDefinitionIterationCount: AutomationRepositoryShape["incrementDefinitionIterationCount"] =
     (input) =>
@@ -1498,6 +1538,7 @@ const makeAutomationRepository = Effect.gen(function* () {
     markRunSkipped,
     markRunSucceeded,
     markRunResult,
+    markRunCompletionResult,
     markRunInterrupted,
     markRunWaitingForApproval,
     cancelRun,

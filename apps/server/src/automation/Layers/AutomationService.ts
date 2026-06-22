@@ -1034,7 +1034,7 @@ export const AutomationServiceLive = Layer.effect(
         const latestRun = yield* latestRunForCompletionResult(input.run);
         const updatedAt = isoNow();
         const updated = yield* automationRepository
-          .markRunResult({
+          .markRunCompletionResult({
             id: latestRun.id,
             result: automationCompletionRunResult({
               baseResult: latestRun.result,

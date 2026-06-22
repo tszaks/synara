@@ -294,6 +294,70 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
+  it.effect("markRunCompletionResult preserves archive/read state from the current row", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-completion-merge"),
+        input: createInputForProject("project-completion-merge"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-completion-merge"),
+        automationId: AutomationId.makeUnsafe("automation-completion-merge"),
+        projectId: ProjectId.makeUnsafe("project-completion-merge"),
+        threadId: ThreadId.makeUnsafe("thread-completion-merge"),
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:05:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* repository.markRunSucceeded({
+        id: AutomationRunId.makeUnsafe("run-completion-merge"),
+        turnId: TurnId.makeUnsafe("turn-completion-merge"),
+        result: null,
+        finishedAt: "2026-06-16T10:10:00.000Z",
+      });
+
+      // A user archives the run (which also marks it read).
+      const archivedAt = "2026-06-16T10:11:00.000Z";
+      yield* repository.archiveRun({
+        runId: AutomationRunId.makeUnsafe("run-completion-merge"),
+        archived: true,
+        now: archivedAt,
+      });
+
+      // A background completion evaluation lands afterwards, carrying stale
+      // triage fields (unarchived / unread) in its result payload.
+      const merged = yield* repository.markRunCompletionResult({
+        id: AutomationRunId.makeUnsafe("run-completion-merge"),
+        result: {
+          outcome: "no-findings",
+          summary: "Stop condition not met.",
+          unread: true,
+          archivedAt: null,
+          completionEvaluation: {
+            stopMatched: false,
+            confidence: 0.4,
+            reason: "Still working through the review.",
+          },
+        },
+        updatedAt: "2026-06-16T10:12:00.000Z",
+      });
+
+      // Archive/read state survives; the completion fields are updated.
+      assert.strictEqual(merged.result?.archivedAt, archivedAt);
+      assert.strictEqual(merged.result?.unread, false);
+      assert.strictEqual(merged.result?.outcome, "no-findings");
+      assert.strictEqual(
+        merged.result?.completionEvaluation?.reason,
+        "Still working through the review.",
+      );
+    }),
+  );
+
   it.effect("admits at most one active run for a thread", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
