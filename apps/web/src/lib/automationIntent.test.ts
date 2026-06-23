@@ -61,8 +61,7 @@ describe("parseChatAutomationIntent", () => {
         "every 3 min watch codex-bot. Stop when codex-bot says the PR is ready to merge. If there are actionable issues, fix them and keep monitoring.",
       ),
     ).toMatchObject({
-      prompt:
-        "watch codex-bot. If there are actionable issues, fix them and keep monitoring.",
+      prompt: "watch codex-bot. If there are actionable issues, fix them and keep monitoring.",
       completionPolicy: {
         type: "ai-evaluated",
         stopWhen: "codex-bot says the PR is ready to merge",
@@ -70,40 +69,44 @@ describe("parseChatAutomationIntent", () => {
       },
     });
 
-    expect(parseChatAutomationInvocation("every 5 min keep monitoring until CI is green"))
-      .toMatchObject({
-        prompt: "keep monitoring",
-        completionPolicy: {
-          type: "ai-evaluated",
-          stopWhen: "CI is green",
-        },
-      });
+    expect(
+      parseChatAutomationInvocation("every 5 min keep monitoring until CI is green"),
+    ).toMatchObject({
+      prompt: "keep monitoring",
+      completionPolicy: {
+        type: "ai-evaluated",
+        stopWhen: "CI is green",
+      },
+    });
 
-    expect(parseChatAutomationInvocation("every 10 min check the PR; if there are no issues, stop"))
-      .toMatchObject({
-        completionPolicy: {
-          type: "ai-evaluated",
-          stopWhen: "there are no issues",
-        },
-      });
+    expect(
+      parseChatAutomationInvocation("every 10 min check the PR; if there are no issues, stop"),
+    ).toMatchObject({
+      completionPolicy: {
+        type: "ai-evaluated",
+        stopWhen: "there are no issues",
+      },
+    });
   });
 
   it("extracts Italian stop clauses into first-class completion policies", () => {
-    expect(parseChatAutomationInvocation("ogni 5 minuti controlla la PR finché è pronta"))
-      .toMatchObject({
-        completionPolicy: {
-          type: "ai-evaluated",
-          stopWhen: "è pronta",
-        },
-      });
+    expect(
+      parseChatAutomationInvocation("ogni 5 minuti controlla la PR finché è pronta"),
+    ).toMatchObject({
+      completionPolicy: {
+        type: "ai-evaluated",
+        stopWhen: "è pronta",
+      },
+    });
 
-    expect(parseChatAutomationInvocation("ogni 5 minuti controlla la PR. Quando è pronta, fermati"))
-      .toMatchObject({
-        completionPolicy: {
-          type: "ai-evaluated",
-          stopWhen: "è pronta",
-        },
-      });
+    expect(
+      parseChatAutomationInvocation("ogni 5 minuti controlla la PR. Quando è pronta, fermati"),
+    ).toMatchObject({
+      completionPolicy: {
+        type: "ai-evaluated",
+        stopWhen: "è pronta",
+      },
+    });
   });
 
   it("parses English and Italian one-shot timers from a deterministic now", () => {
@@ -437,6 +440,35 @@ describe("parseChatAutomationIntent", () => {
       source: "generated",
       generatedNeedsConfirmation: true,
       intent: { schedule: { type: "interval", everySeconds: 15 }, cadenceLabel: "Every 15s" },
+    });
+  });
+
+  it("always requires review for generated intents, even confident no-confirmation ones", () => {
+    // The auto-submit gap: high confidence, needsConfirmation false, no AI stop
+    // policy. Previously requiresReview was false and ChatView created it with no
+    // dialog. Generated intents must always open the editable draft first.
+    const resolved = resolveChatAutomationIntent({
+      deterministicIntent: null,
+      generatedIntent: {
+        isAutomation: true,
+        confidence: 0.99,
+        language: "en",
+        name: "Check PRs",
+        taskPrompt: "check my PRs",
+        schedule: { type: "interval", everySeconds: 21_600 },
+        mode: "heartbeat",
+        completionPolicy: { type: "none" },
+        missingFields: [],
+        needsConfirmation: false,
+        reason: null,
+      },
+      isServerThread: true,
+    });
+
+    expect(resolved).toMatchObject({
+      source: "generated",
+      requiresReview: true,
+      generatedNeedsConfirmation: false,
     });
   });
 
