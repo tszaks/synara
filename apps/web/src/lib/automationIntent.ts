@@ -1021,9 +1021,13 @@ export function resolveChatAutomationIntent(input: {
     intent: generatedIntent,
     mode,
     source: "generated",
-    requiresReview:
-      generatedIntent.executionScope !== "thread" ||
-      requiresCompletionPolicyReview(requestedMode, generatedIntent.completionPolicy),
+    // Generated (LLM-interpreted) intents always require a human confirmation step: a
+    // misread message must never silently create a recurring background automation, no
+    // matter how confident the model is. Deterministic explicit intents keep their
+    // finer-grained gating above, including the intentional bounded-fast-loop
+    // auto-submit, which never reaches this branch because generation is skipped for it
+    // in resolveComposerAutomationRequest.
+    requiresReview: true,
     generatedConfidence: input.generatedIntent?.confidence ?? null,
     generatedNeedsConfirmation:
       (input.generatedIntent?.needsConfirmation ?? false) || fastRecurringInterval,
