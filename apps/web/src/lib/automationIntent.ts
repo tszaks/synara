@@ -115,7 +115,10 @@ function extractStopClause(value: string): ParsedStopClause | null {
   ];
   for (const pattern of patterns) {
     const match = pattern.exec(value);
-    const stopWhen = match?.[1]?.trim().replace(/[.!?]+$/g, "").trim();
+    const stopWhen = match?.[1]
+      ?.trim()
+      .replace(/[.!?]+$/g, "")
+      .trim();
     if (!match || !stopWhen) {
       continue;
     }
@@ -690,10 +693,13 @@ export function resolveChatAutomationIntent(input: {
     intent: generatedIntent,
     mode,
     source: "generated",
-    requiresReview: requiresCompletionPolicyReview(
-      requestedMode,
-      generatedIntent.completionPolicy,
-    ),
+    // LLM-derived automations always go through the editable draft before they are
+    // created. They run unattended in the background, and a confidently-misread chat
+    // message ("@automation check my PRs") must not silently become a recurring
+    // automation. The deterministic path (explicit schedule + action) can still
+    // fast-submit. This keeps the invariant true everywhere the resolution is read,
+    // not just at the ChatView submit gate.
+    requiresReview: true,
     generatedConfidence: input.generatedIntent?.confidence ?? null,
     generatedNeedsConfirmation:
       (input.generatedIntent?.needsConfirmation ?? false) || fastRecurringInterval,
