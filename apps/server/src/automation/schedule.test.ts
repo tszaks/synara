@@ -16,7 +16,9 @@ function wallClockInZone(iso: string, timeZone: string): string {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false,
+    // Match the production timezoneFormatter (schedule.ts) exactly: hourCycle "h23"
+    // pins midnight to 00:00, whereas hour12:false may resolve to "24:00" per ECMA-402.
+    hourCycle: "h23",
   }).formatToParts(new Date(iso));
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "??";
   return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
@@ -107,7 +109,9 @@ describe("computeNextAutomationRunAt", () => {
       "2026-11-01T04:00:00.000Z", // 2026-11-01 00:00 EDT, before either 01:30
     );
     expect(first).toBe("2026-11-01T05:30:00.000Z"); // the FIRST 01:30 (EDT), not 06:30Z
-    expect(wallClockInZone(first!, "America/New_York")).toBe("2026-11-01 01:30");
+    // No wall-clock assertion on `first`: both duplicate-hour instants (05:30Z and 06:30Z)
+    // render "01:30" in-zone, so wall clock cannot discriminate the first occurrence. The
+    // UTC assertion above is the real check; `afterFirst` below uses wall clock where it differs.
 
     // The occurrence after the first 01:30 is the next day, not the second 01:30 on the
     // fall-back day (no double fire within the duplicated hour).
