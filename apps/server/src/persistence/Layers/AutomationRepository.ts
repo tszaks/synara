@@ -744,7 +744,17 @@ const makeAutomationRepository = Effect.gen(function* () {
                       json_extract(result_json, '$.archivedAt')
                     ),
                     '$.unread',
-                    json(CASE WHEN json_extract(result_json, '$.unread') = 0 THEN 'false' ELSE 'true' END)
+                    json(
+                      CASE
+                        -- Existing row has no boolean unread (legacy/null): fall back to the
+                        -- incoming result's value rather than implicitly defaulting to unread.
+                        WHEN json_extract(result_json, '$.unread') IS NULL THEN
+                          CASE WHEN json_extract(${JSON.stringify(result)}, '$.unread') = 0
+                            THEN 'false' ELSE 'true' END
+                        WHEN json_extract(result_json, '$.unread') = 0 THEN 'false'
+                        ELSE 'true'
+                      END
+                    )
                   )
                 END,
                 updated_at = ${updatedAt}
