@@ -93,26 +93,39 @@ describe("computeNextAutomationRunAt", () => {
       { type: "daily", timeOfDay: "02:30", timezone: "America/New_York" },
       "2026-03-08T05:00:00.000Z", // 2026-03-08 00:00 EST, before the missing slot
     );
-    expect(next).not.toBeNull();
+    expect(next).toBe("2026-03-09T06:30:00.000Z"); // 02:30 EDT the next day
     expect(wallClockInZone(next!, "America/New_York")).toBe("2026-03-09 02:30");
   });
 
   it("fires a fall-back duplicate hour exactly once per day", () => {
-    // America/New_York falls back 2026-11-01 02:00 -> 01:00, so 01:30 happens twice.
+    // America/New_York falls back 2026-11-01 02:00 -> 01:00, so 01:30 happens twice:
+    // the first at 01:30 EDT (05:30Z) and the second at 01:30 EST (06:30Z). Assert the
+    // exact UTC instant, not just the wall clock — both duplicates render "01:30" in the
+    // zone, so a wall-clock-only check could not tell the first from the second.
     const first = computeNextAutomationRunAt(
       { type: "daily", timeOfDay: "01:30", timezone: "America/New_York" },
       "2026-11-01T04:00:00.000Z", // 2026-11-01 00:00 EDT, before either 01:30
     );
-    expect(first).not.toBeNull();
+    expect(first).toBe("2026-11-01T05:30:00.000Z"); // the FIRST 01:30 (EDT), not 06:30Z
     expect(wallClockInZone(first!, "America/New_York")).toBe("2026-11-01 01:30");
-    // The occurrence after the first 01:30 is the next day, not the second 01:30
-    // on the fall-back day (no double fire within the duplicated hour).
+
+    // The occurrence after the first 01:30 is the next day, not the second 01:30 on the
+    // fall-back day (no double fire within the duplicated hour).
     const afterFirst = computeNextAutomationRunAt(
       { type: "daily", timeOfDay: "01:30", timezone: "America/New_York" },
       first!,
     );
-    expect(afterFirst).not.toBeNull();
+    expect(afterFirst).toBe("2026-11-02T06:30:00.000Z"); // next day's 01:30 (EST), not the 2nd 01:30
     expect(wallClockInZone(afterFirst!, "America/New_York")).toBe("2026-11-02 01:30");
+
+    // The dispatcher path (computeNextAutomationRunAtAfter with `now` inside the repeated
+    // hour) must also skip the second same-day 01:30 rather than double-firing.
+    const afterInRepeatedHour = computeNextAutomationRunAtAfter(
+      { type: "daily", timeOfDay: "01:30", timezone: "America/New_York" },
+      first!,
+      "2026-11-01T05:45:00.000Z", // 01:45 EDT — still before the second 01:30 (06:30Z)
+    );
+    expect(afterInRepeatedHour).toBe("2026-11-02T06:30:00.000Z");
   });
 
   it("uses timezone-aware daily slots when timezone is present", () => {
