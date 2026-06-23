@@ -1328,6 +1328,62 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("records a stale stop check when the policy changes during a hung evaluation", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-timeout-stale");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-timeout-stale");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.99,
+        reason: "Should never be read because the evaluation hangs.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "Still working through the review.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "hung stop evaluation to start",
+      });
+
+      // The user clears the completion policy while the provider call is still hung.
+      yield* service.update({ id: created.id, completionPolicy: { type: "none" } });
+      // When the 30s timeout fires it must record the stale-check result, not a live
+      // "timed out" warning for a policy the user already removed.
+      yield* TestClock.adjust(Duration.seconds(31));
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "stale timed-out stop evaluation",
+        predicate: (current) =>
+          current.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.reason ===
+          "Stop check ignored because the automation changed before evaluation finished.",
+      });
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.notInclude((updatedRun?.result?.summary ?? "").toLowerCase(), "timed out");
+
+      evaluationGate.release();
+    }),
+  );
+
   it.effect("does not block reconciliation while AI stop evaluation is pending", () =>
     Effect.gen(function* () {
       resetHarness();
