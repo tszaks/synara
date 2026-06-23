@@ -1204,16 +1204,29 @@ export const AutomationServiceLive = Layer.effect(
             Effect.timeoutOption(AUTOMATION_COMPLETION_EVALUATION_TIMEOUT_MS),
           );
         if (Option.isNone(evaluationOption)) {
-          // Timed out: record a visible failed stop check and keep the heartbeat alive,
-          // rather than retrying and risking another stuck worker.
+          // Timed out. Reload the definition first: if the automation was edited, disabled,
+          // archived, or its policy changed while the provider call hung, record the same
+          // stale-check result the success path uses rather than surfacing a misleading live
+          // "Stop check timed out." warning for a policy the user already changed. Either way
+          // keep the heartbeat alive without retrying (a retry would risk another stuck worker).
           const reason = normalizeAutomationCompletionReason("Stop check timed out.");
-          yield* recordCompletionEvaluation({
-            run,
-            evaluation: failedAutomationCompletionEvaluation(reason),
-            matched: false,
-            summary: reason,
-            severity: "warning",
-          });
+          const timedOut = failedAutomationCompletionEvaluation(reason);
+          const stillCurrent = Option.isSome(yield* loadCurrentStopDefinition(definition, policy));
+          if (stillCurrent) {
+            yield* recordCompletionEvaluation({
+              run,
+              evaluation: timedOut,
+              matched: false,
+              summary: reason,
+              severity: "warning",
+            });
+          } else {
+            yield* recordCompletionEvaluation({
+              run,
+              evaluation: staleStopCheckEvaluation(timedOut),
+              matched: false,
+            });
+          }
           return false;
         }
         const evaluationRaw = evaluationOption.value;
