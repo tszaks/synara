@@ -114,6 +114,15 @@ function errorMessage(cause: unknown): string {
   return redactSecrets(raw).slice(0, AUTOMATION_ERROR_MAX_CHARS);
 }
 
+// Recovery/reconcile failures arrive already wrapped by `toServiceError`, whose
+// message is the static wrapper string; the real failure (SQLite error, defect)
+// is in `.cause`. Prefer the underlying cause so the logged warning is useful.
+function recoveryErrorMessage(error: unknown): string {
+  return error instanceof AutomationServiceError && error.cause != null
+    ? errorMessage(error.cause)
+    : errorMessage(error);
+}
+
 function resultSummary(value: string | null | undefined, fallback?: string): string | null {
   return automationRunResultSummary(value, fallback);
 }
@@ -1556,7 +1565,7 @@ export const AutomationServiceLive = Layer.effect(
                   Effect.logWarning("automation active-run reconcile failed", {
                     automationId: run.automationId,
                     runId: run.id,
-                    error: errorMessage(error),
+                    error: recoveryErrorMessage(error),
                   }),
                 ),
               ),
@@ -1585,7 +1594,7 @@ export const AutomationServiceLive = Layer.effect(
                     Effect.logWarning("automation orphaned-run recovery failed", {
                       automationId: run.automationId,
                       runId: run.id,
-                      error: errorMessage(error),
+                      error: recoveryErrorMessage(error),
                     }),
                   ),
                 );
@@ -1615,7 +1624,7 @@ export const AutomationServiceLive = Layer.effect(
                   Effect.logWarning("automation pending-run recovery failed", {
                     automationId: run.automationId,
                     runId: run.id,
-                    error: errorMessage(error),
+                    error: recoveryErrorMessage(error),
                   }),
                 ),
               );
