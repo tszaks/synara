@@ -358,6 +358,64 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
+  it.effect("markRunCompletionResult preserves a read run that was not archived", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+
+      yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("automation-read-merge"),
+        input: createInputForProject("project-read-merge"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("run-read-merge"),
+        automationId: AutomationId.makeUnsafe("automation-read-merge"),
+        projectId: ProjectId.makeUnsafe("project-read-merge"),
+        threadId: ThreadId.makeUnsafe("thread-read-merge"),
+        trigger: { type: "manual" },
+        scheduledFor: "2026-06-16T10:05:00.000Z",
+        permissionSnapshot,
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* repository.markRunSucceeded({
+        id: AutomationRunId.makeUnsafe("run-read-merge"),
+        turnId: TurnId.makeUnsafe("turn-read-merge"),
+        result: null,
+        finishedAt: "2026-06-16T10:10:00.000Z",
+      });
+
+      // User marks the run read WITHOUT archiving it.
+      yield* repository.markRunRead({
+        runId: AutomationRunId.makeUnsafe("run-read-merge"),
+        unread: false,
+        now: "2026-06-16T10:11:00.000Z",
+      });
+
+      // A background completion eval lands with stale triage fields (unread: true).
+      const merged = yield* repository.markRunCompletionResult({
+        id: AutomationRunId.makeUnsafe("run-read-merge"),
+        result: {
+          outcome: "no-findings",
+          summary: "Stop condition not met.",
+          unread: true,
+          archivedAt: null,
+          completionEvaluation: {
+            stopMatched: false,
+            confidence: 0.4,
+            reason: "Still working through the review.",
+          },
+        },
+        updatedAt: "2026-06-16T10:12:00.000Z",
+      });
+
+      // Read state is preserved in isolation; archive stays null; completion fields update.
+      assert.strictEqual(merged.result?.unread, false);
+      assert.strictEqual(merged.result?.archivedAt, null);
+      assert.strictEqual(merged.result?.outcome, "no-findings");
+    }),
+  );
+
   it.effect("admits at most one active run for a thread", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;
