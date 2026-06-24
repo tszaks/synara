@@ -26,6 +26,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { AutomationService } from "./automation/Services/AutomationService";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/http";
 import { ServerAuth } from "./auth/Services/ServerAuth";
+import { ServerSecretStore } from "./auth/Services/ServerSecretStore";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { ServerConfig } from "./config";
@@ -61,6 +62,10 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
+
+// Secret-store key for Memory's embedding API key. The key is a credential, so it lives in the
+// 0700 secret store, never in settings.json.
+const MEMORY_EMBEDDING_API_KEY_SECRET = "memory-embedding-api-key";
 
 interface ProcessTableRow {
   readonly pid: number;
@@ -346,6 +351,7 @@ export const makeWsRpcLayer = () =>
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
+      const serverSecretStore = yield* ServerSecretStore;
       const serverSettings = yield* ServerSettingsService;
       const terminalManager = yield* TerminalManager;
       const textGeneration = yield* TextGeneration;
@@ -900,6 +906,24 @@ export const makeWsRpcLayer = () =>
           rpcEffect(serverSettings.getSettings, "Failed to load server settings"),
         [WS_METHODS.serverUpdateSettings]: (input) =>
           rpcEffect(serverSettings.updateSettings(input), "Failed to update server settings"),
+        [WS_METHODS.memorySetEmbeddingApiKey]: (input) =>
+          // The embedding API key is a credential: write it to the 0700 secret store, never to
+          // settings.json. An empty key clears the stored secret.
+          rpcEffect(
+            Effect.gen(function* () {
+              const apiKey = input.apiKey.trim();
+              if (apiKey.length === 0) {
+                yield* serverSecretStore.remove(MEMORY_EMBEDDING_API_KEY_SECRET);
+                return { stored: false } as const;
+              }
+              yield* serverSecretStore.set(
+                MEMORY_EMBEDDING_API_KEY_SECRET,
+                new TextEncoder().encode(apiKey),
+              );
+              return { stored: true } as const;
+            }),
+            "Failed to store memory embedding API key",
+          ),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
             providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),

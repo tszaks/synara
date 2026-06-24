@@ -39,15 +39,11 @@ export const makePalliumServiceLive = (options?: PalliumServiceLiveOptions) =>
       const statusCacheRef = yield* Ref.make<StatusCacheEntry | null>(null);
       const ttlMs = options?.statusCacheTtlMs ?? STATUS_CACHE_TTL_MS;
 
-      // TODO(PR4): read `settings.memory.binaryPath` once the Memory settings block exists. Until
-      // then the binary path defaults to "pallium" (resolved on PATH).
-      const resolveBinaryPath = Effect.sync(() => DEFAULT_PALLIUM_BINARY).pipe(
-        Effect.catchCause(() => Effect.succeed(DEFAULT_PALLIUM_BINARY)),
-      );
-      // Touch serverSettings so the dependency is real and ready for PR4 to use; failure to read
-      // settings must never break the handshake.
+      // Resolve the binary path from the Memory settings block, falling back to "pallium" (resolved
+      // on PATH) for an empty/missing value. Failure to read settings must never break the
+      // handshake, which is contractually `Effect<…, never>`.
       const readBinaryPath = serverSettings.getSettings.pipe(
-        Effect.flatMap(() => resolveBinaryPath),
+        Effect.map((settings) => settings.memory.binaryPath.trim() || DEFAULT_PALLIUM_BINARY),
         Effect.catchCause(() => Effect.succeed(DEFAULT_PALLIUM_BINARY)),
       );
 

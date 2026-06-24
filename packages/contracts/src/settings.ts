@@ -73,6 +73,34 @@ export const PiServerProviderSettings = Schema.Struct({
 });
 export type PiServerProviderSettings = typeof PiServerProviderSettings.Type;
 
+// Embedding provider config for Memory's semantic search. The api KEY lives in the secret store
+// (key "memory-embedding-api-key"), never here, so settings.json never carries a credential.
+export const MemoryEmbeddingSettings = Schema.Struct({
+  // OpenAI-compatible provider label (e.g. "openai", "ollama"). Vectors are partitioned by
+  // (provider, model) so spaces never mix.
+  provider: StringSetting.pipe(Schema.withDecodingDefault(() => "ollama")),
+  // OpenAI-compatible base URL. Empty means the provider default endpoint.
+  baseUrl: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  // Default = a free local OSS model (nomic-embed-text via Ollama). Lexical search still works
+  // with zero embedding setup, so this is only used once embeddings are enabled.
+  model: StringSetting.pipe(Schema.withDecodingDefault(() => "nomic-embed-text")),
+});
+export type MemoryEmbeddingSettings = typeof MemoryEmbeddingSettings.Type;
+
+// Server-side settings for the optional Pallium-backed Memory feature. Every field has a decoding
+// default so a legacy settings.json with no `memory` block still decodes. `enabled` defaults to
+// false: Memory stays off (and hidden) until the user opts in.
+export const MemoryServerSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "pallium")),
+  embedding: MemoryEmbeddingSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  // How often the background scheduler refreshes the index, in minutes.
+  indexingCadence: Schema.Number.pipe(Schema.withDecodingDefault(() => 15)),
+  // Soft ceiling for Synara's Memory cache, in megabytes.
+  storageBudgetMb: Schema.Number.pipe(Schema.withDecodingDefault(() => 512)),
+});
+export type MemoryServerSettings = typeof MemoryServerSettings.Type;
+
 const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
   Schema.withDecodingDefault(() => []),
 );
@@ -105,6 +133,7 @@ export const ServerSettings = Schema.Struct({
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  memory: MemoryServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -176,6 +205,21 @@ export const ServerSettingsPatch = Schema.Struct({
   skills: Schema.optionalKey(
     Schema.Struct({
       disabled: Schema.optionalKey(Schema.Array(Schema.String.check(Schema.isMaxLength(256)))),
+    }),
+  ),
+  memory: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      binaryPath: Schema.optionalKey(StringSetting),
+      embedding: Schema.optionalKey(
+        Schema.Struct({
+          provider: Schema.optionalKey(StringSetting),
+          baseUrl: Schema.optionalKey(StringSetting),
+          model: Schema.optionalKey(StringSetting),
+        }),
+      ),
+      indexingCadence: Schema.optionalKey(Schema.Number),
+      storageBudgetMb: Schema.optionalKey(Schema.Number),
     }),
   ),
 });

@@ -21,6 +21,7 @@ export type RuntimeMode = "web" | "desktop";
 export interface ServerDerivedPaths {
   readonly stateDir: string;
   readonly secretsDir: string;
+  readonly memoryDir: string;
   readonly dbPath: string;
   readonly settingsPath: string;
   readonly keybindingsConfigPath: string;
@@ -63,6 +64,7 @@ export const deriveServerPaths = Effect.fn(function* (
   const { join } = yield* Path.Path;
   const stateDir = join(baseDir, devUrl !== undefined ? "dev" : "userdata");
   const secretsDir = join(stateDir, "secrets");
+  const memoryDir = join(stateDir, "memory");
   const dbPath = join(stateDir, "state.sqlite");
   const attachmentsDir = join(stateDir, "attachments");
   const logsDir = join(stateDir, "logs");
@@ -70,6 +72,7 @@ export const deriveServerPaths = Effect.fn(function* (
   return {
     stateDir,
     secretsDir,
+    memoryDir,
     dbPath,
     settingsPath: join(stateDir, "settings.json"),
     keybindingsConfigPath: join(stateDir, "keybindings.json"),

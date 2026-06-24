@@ -314,6 +314,13 @@ describe("wsNativeApi", () => {
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
         skills: { disabled: [] },
+        memory: {
+          enabled: false,
+          binaryPath: "pallium",
+          embedding: { provider: "ollama", baseUrl: "", model: "nomic-embed-text" },
+          indexingCadence: 15,
+          storageBudgetMb: 512,
+        },
       },
     } as const;
     emitPush(WS_CHANNELS.serverSettingsUpdated, payload);
