@@ -252,6 +252,31 @@ describe("automationApprovalGaps", () => {
     expect(gaps.acknowledgedRisks).toEqual([]);
   });
 
+  it("does not block a heartbeat on local-checkout but persists it on approve", () => {
+    // Heartbeat reuses the target thread (no local env), so local-checkout never blocks the
+    // run. It is still persisted on approve so automation.update accepts a local heartbeat.
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      worktreeMode: "local",
+      mode: "heartbeat",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
+  });
+
+  it("needs no approval for an approval-required local heartbeat", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      worktreeMode: "local",
+      mode: "heartbeat",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings).toEqual([]);
+    expect(gaps.acknowledgedRisks).toEqual([]);
+  });
+
   it("does not block an auto worktree but covers its fallback on approve", () => {
     // worktreeMode "auto" is not a definite blocker, so the banner stays full-access only and
     // Run now is not disabled for it. But approving persists local-checkout too, so the

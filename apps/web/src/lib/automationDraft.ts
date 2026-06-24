@@ -184,7 +184,13 @@ export function automationApprovalGaps(input: {
   if (input.runtimeMode === "full-access" && !acknowledged.has("full-access")) {
     blocking.add("full-access");
   }
-  if (input.worktreeMode === "local" && !acknowledged.has("local-checkout")) {
+  if (
+    input.worktreeMode === "local" &&
+    // Heartbeat runs reuse the target thread and never resolve a local/worktree environment,
+    // so local-checkout consent cannot block them; only standalone runs are gated at dispatch.
+    input.mode === "standalone" &&
+    !acknowledged.has("local-checkout")
+  ) {
     blocking.add("local-checkout");
   }
   if (blocking.size === 0) {
