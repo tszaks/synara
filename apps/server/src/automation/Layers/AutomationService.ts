@@ -299,17 +299,15 @@ function effectiveMinimumIntervalSeconds(input: {
   return input.minimumIntervalSeconds;
 }
 
-// Single source of truth for the risks an automation must acknowledge before it can run.
-// Enforced uniformly at create, update, and run (dispatchRun) so an automation can never reach
-// a run unacknowledged. The `local` worktree check applies to every mode: a heartbeat reuses
-// its target thread, but that thread can itself sit on the local checkout, so continuing it
-// still runs the provider against the active project root.
+// Single source of truth for the runtime risks an automation must acknowledge before it can
+// run. Enforced uniformly at create, update, and run (dispatchRun) so an automation can never
+// reach a run unacknowledged. The `local` worktree check applies to every mode: a heartbeat
+// reuses its target thread, but that thread can itself sit on the local checkout, so continuing
+// it still runs the provider against the active project root.
 function riskAcknowledgementError(input: {
   readonly runtimeMode: AutomationDefinition["runtimeMode"];
   readonly worktreeMode: AutomationDefinition["worktreeMode"];
-  readonly schedule?: AutomationDefinition["schedule"];
   readonly acknowledgedRisks: readonly string[];
-  readonly now?: string;
 }): string | null {
   const acknowledgedRisks = new Set(input.acknowledgedRisks);
   if (input.runtimeMode === "full-access" && !acknowledgedRisks.has("full-access")) {
@@ -318,18 +316,35 @@ function riskAcknowledgementError(input: {
   if (input.worktreeMode === "local" && !acknowledgedRisks.has("local-checkout")) {
     return "Automation local checkout mode requires an explicit acknowledgement.";
   }
-  // Sub-minute schedules can create runaway unattended runs. validateSchedulePolicy enforces
-  // this at create/update; passing schedule+now here lets the dispatch gate enforce it on the
-  // run path too, where validateSchedulePolicy never runs.
-  if (input.schedule !== undefined && input.now !== undefined) {
-    const spacingSeconds = computeAutomationScheduleSpacingSeconds(input.schedule, input.now);
-    if (
-      spacingSeconds !== null &&
-      spacingSeconds < DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS &&
-      !acknowledgedRisks.has("fast-interval")
-    ) {
-      return "Automation fast interval mode requires an explicit acknowledgement.";
-    }
+  return null;
+}
+
+// Single source of truth for the fast-interval policy: a sub-minute schedule needs the
+// `fast-interval` acknowledgement AND a bounded iteration cap, treated as a pair so an
+// acknowledged loop can't run unbounded. Shared by validateSchedulePolicy (create/update) and
+// the dispatch gate (the run-path backstop). May throw if the schedule has an invalid cron or
+// timezone, so callers must wrap it (Effect.try) to surface a typed error.
+function fastIntervalPolicyError(input: {
+  readonly schedule: AutomationDefinition["schedule"];
+  readonly enabled: boolean;
+  readonly maxIterations: AutomationDefinition["maxIterations"];
+  readonly acknowledgedRisks: readonly string[];
+  readonly now: string;
+}): string | null {
+  const spacingSeconds = computeAutomationScheduleSpacingSeconds(input.schedule, input.now);
+  if (spacingSeconds === null || spacingSeconds >= DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS) {
+    return null;
+  }
+  if (!input.acknowledgedRisks.includes("fast-interval")) {
+    return `Automation schedule must run at least ${DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS} seconds apart.`;
+  }
+  const exceedsFastIterationCap =
+    input.maxIterations === null ||
+    input.maxIterations > DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS;
+  // Pausing a legacy fast loop must always remain possible; enforce the hard cap only for
+  // definitions that will continue running.
+  if (input.enabled && exceedsFastIterationCap) {
+    return `Fast interval automations must set max iterations to ${DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS} runs or fewer.`;
   }
   return null;
 }
@@ -645,25 +660,9 @@ export const AutomationServiceLive = Layer.effect(
       Effect.try({
         try: () => {
           const spacingSeconds = computeAutomationScheduleSpacingSeconds(input.schedule, input.now);
-          if (
-            spacingSeconds !== null &&
-            spacingSeconds < DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS
-          ) {
-            if (!input.acknowledgedRisks.includes("fast-interval")) {
-              throw new Error(
-                `Automation schedule must run at least ${DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS} seconds apart.`,
-              );
-            }
-            const exceedsFastIterationCap =
-              input.maxIterations === null ||
-              input.maxIterations > DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS;
-            // Pausing a legacy fast loop must always remain possible; enforce the new
-            // hard cap only for definitions that will continue running.
-            if (input.enabled && exceedsFastIterationCap) {
-              throw new Error(
-                `Fast interval automations must set max iterations to ${DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS} runs or fewer.`,
-              );
-            }
+          const fastIntervalError = fastIntervalPolicyError(input);
+          if (fastIntervalError) {
+            throw new Error(fastIntervalError);
           }
           const minimumIntervalSeconds = effectiveMinimumIntervalSeconds(input);
           if (spacingSeconds !== null && spacingSeconds < minimumIntervalSeconds) {
@@ -697,9 +696,7 @@ export const AutomationServiceLive = Layer.effect(
     const validateRiskAcknowledgements = (input: {
       readonly runtimeMode: AutomationDefinition["runtimeMode"];
       readonly worktreeMode: AutomationDefinition["worktreeMode"];
-      readonly schedule?: AutomationDefinition["schedule"];
       readonly acknowledgedRisks: readonly string[];
-      readonly now?: string;
     }) => {
       const message = riskAcknowledgementError(input);
       return message
@@ -710,6 +707,26 @@ export const AutomationServiceLive = Layer.effect(
           )
         : Effect.void;
     };
+
+    // Run-path backstop for the fast-interval policy. validateSchedulePolicy enforces this at
+    // create/update; this guards the run path it never covers. Effect.try converts a throwing
+    // schedule (invalid cron/timezone in a persisted row) into a typed error so the dispatch
+    // failure path records the run as failed instead of dying on a defect.
+    const validateFastIntervalPolicy = (input: {
+      readonly schedule: AutomationDefinition["schedule"];
+      readonly enabled: boolean;
+      readonly maxIterations: AutomationDefinition["maxIterations"];
+      readonly acknowledgedRisks: readonly string[];
+      readonly now: string;
+    }) =>
+      Effect.try({
+        try: () => fastIntervalPolicyError(input),
+        catch: (cause) => new AutomationServiceError({ message: errorMessage(cause), cause }),
+      }).pipe(
+        Effect.flatMap((message) =>
+          message ? Effect.fail(new AutomationServiceError({ message })) : Effect.void,
+        ),
+      );
 
     const resolveThreadEnvironment = (
       definition: AutomationDefinition,
@@ -847,16 +864,21 @@ export const AutomationServiceLive = Layer.effect(
           );
         }
 
-        // Enforce the acknowledgement gate at dispatch, not just create/update, so an enabled
-        // automation that reached a run unacknowledged (e.g. inserted via the API/DB without
-        // consent) cannot run on schedule or via Run now. Passing schedule+now also covers the
-        // fast-interval risk here, the one run-path that validateSchedulePolicy never guards.
-        // Fails before the run is marked started; the catch at the end of dispatchRun records it
-        // as a clean failed run, and the scheduler has already advanced past this occurrence.
+        // Enforce the gate at dispatch, not just create/update, so an enabled automation that
+        // reached a run unacknowledged (e.g. inserted via the API/DB without consent) cannot run
+        // on schedule or via Run now. Reuses the same validators as create/update so the backstop
+        // stays consistent with them. Fails before the run is marked started; the catch at the end
+        // of dispatchRun records it as a clean failed run, and the scheduler has already advanced
+        // past this occurrence.
         yield* validateRiskAcknowledgements({
           runtimeMode: definition.runtimeMode,
           worktreeMode: definition.worktreeMode,
+          acknowledgedRisks: definition.acknowledgedRisks,
+        });
+        yield* validateFastIntervalPolicy({
           schedule: definition.schedule,
+          enabled: definition.enabled,
+          maxIterations: definition.maxIterations,
           acknowledgedRisks: definition.acknowledgedRisks,
           now,
         });
