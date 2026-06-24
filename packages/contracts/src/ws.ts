@@ -80,6 +80,7 @@ import {
 } from "./project";
 import { FilesystemBrowseInput } from "./filesystem";
 import { OpenInEditorInput } from "./editor";
+import { MemoryOverviewInput, MemoryStatusInput } from "./memory";
 import {
   MemorySetEmbeddingApiKeyInput,
   ServerConfigUpdatedPayload,
@@ -218,6 +219,8 @@ export const WS_METHODS = {
 
   // Memory methods
   memorySetEmbeddingApiKey: "memory.setEmbeddingApiKey",
+  memoryStatus: "memory.status",
+  memoryOverview: "memory.overview",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -357,6 +360,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.automationArchiveRun, AutomationArchiveRunInput),
   tagRequestBody(WS_METHODS.subscribeAutomationEvents, Schema.Struct({})),
   tagRequestBody(WS_METHODS.memorySetEmbeddingApiKey, MemorySetEmbeddingApiKeyInput),
+  tagRequestBody(WS_METHODS.memoryStatus, MemoryStatusInput),
+  tagRequestBody(WS_METHODS.memoryOverview, MemoryOverviewInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({

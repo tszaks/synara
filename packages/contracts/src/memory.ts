@@ -12,7 +12,7 @@
 
 import { Schema } from "effect";
 
-import { IsoDateTime } from "./baseSchemas";
+import { IsoDateTime, NonNegativeInt, ProjectId } from "./baseSchemas";
 
 // --- Pallium output schemas (decode `pallium … --json`) ------------------------------------------
 
@@ -98,3 +98,75 @@ export const PalliumStatus = Schema.Struct({
   reason: Schema.optional(Schema.String),
 });
 export type PalliumStatus = typeof PalliumStatus.Type;
+
+// --- Memory WS contract schemas (the stable Synara-side WS API) ----------------------------------
+//
+// These are the schemas that travel over the WebSocket surface. The server maps Pallium output
+// (PalliumStatus / PalliumDoctorResult above) into these shapes. Keeping them distinct from the
+// Pallium output schemas means a Pallium JSON change touches only the server-side mapper, never
+// the WS contract the web client depends on.
+
+// `memory.status` input. Status is global (a capability handshake), so it takes no arguments.
+export const MemoryStatusInput = Schema.Struct({});
+export type MemoryStatusInput = typeof MemoryStatusInput.Type;
+
+// `memory.status` result: the WS-facing capability handshake. `available: false` means Pallium is
+// absent/too old/unreadable; the web client hides the Memory feature and Synara behaves as today.
+export const MemoryStatus = Schema.Struct({
+  available: Schema.Boolean,
+  version: Schema.optional(Schema.String),
+  capabilities: PalliumCapabilities,
+  checkedAt: IsoDateTime,
+  // Human-readable explanation when unavailable (e.g. "pallium not found on PATH").
+  reason: Schema.optional(Schema.String),
+});
+export type MemoryStatus = typeof MemoryStatus.Type;
+
+// `memory.overview` input. An optional project scopes the overview to one repo; omitted means the
+// status-only / no-repo overview (a zeroed, valid result).
+export const MemoryOverviewInput = Schema.Struct({
+  projectId: Schema.optional(ProjectId),
+});
+export type MemoryOverviewInput = typeof MemoryOverviewInput.Type;
+
+// One stored embedding space, surfaced to the UI (mapped from PalliumEmbeddingModel).
+export const MemoryEmbeddingModel = Schema.Struct({
+  provider: Schema.String,
+  model: Schema.String,
+  dim: NonNegativeInt,
+  count: NonNegativeInt,
+});
+export type MemoryEmbeddingModel = typeof MemoryEmbeddingModel.Type;
+
+// Index freshness, mapped from doctor. `indexStatus` is one of "missing" | "stale" | "indexed"
+// today but kept as String so a new Pallium status can't break decoding.
+export const MemoryIndexStatus = Schema.String;
+export type MemoryIndexStatus = typeof MemoryIndexStatus.Type;
+
+// `memory.overview` result: the counts + freshness the overview panel renders. When Pallium is
+// unavailable (or no project is indexed) the server returns a valid, zeroed overview rather than
+// failing, so the UI shows an empty/install state instead of an error toast.
+export const MemoryOverview = Schema.Struct({
+  // False mirrors MemoryStatus.available so the panel can short-circuit to the empty state.
+  available: Schema.Boolean,
+  indexStatus: MemoryIndexStatus,
+  // True once `pallium index` has run for the project (doctor.index_status === "indexed").
+  indexed: Schema.Boolean,
+  // Last successful index time (doctor.indexed_at) and the commit it covered, when known.
+  lastIndexedAt: Schema.optional(Schema.String),
+  lastIndexedCommit: Schema.optional(Schema.String),
+  // True when the working tree has uncommitted changes since the last index.
+  workingTreeDirty: Schema.Boolean,
+  counts: Schema.Struct({
+    sessions: NonNegativeInt,
+    events: NonNegativeInt,
+    messages: NonNegativeInt,
+    chunks: NonNegativeInt,
+    embeddings: NonNegativeInt,
+    workingTreeFiles: NonNegativeInt,
+  }),
+  embeddingModels: Schema.Array(MemoryEmbeddingModel),
+  // Sessions not yet embedded (doctor.embedding_backlog). Zero when embeddings are off/unused.
+  embeddingBacklog: NonNegativeInt,
+});
+export type MemoryOverview = typeof MemoryOverview.Type;

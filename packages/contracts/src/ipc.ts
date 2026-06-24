@@ -28,6 +28,12 @@ import type {
   AutomationUpdateInput,
 } from "./automation";
 import type {
+  MemoryOverview,
+  MemoryOverviewInput,
+  MemoryStatus,
+  MemoryStatusInput,
+} from "./memory";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitCreateBranchInput,
@@ -564,6 +570,10 @@ export interface NativeApi {
     markRunRead: (input: AutomationMarkRunReadInput) => Promise<AutomationRunActionResult>;
     archiveRun: (input: AutomationArchiveRunInput) => Promise<AutomationRunActionResult>;
     onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
+  };
+  memory: {
+    status: (input?: MemoryStatusInput) => Promise<MemoryStatus>;
+    overview: (input?: MemoryOverviewInput) => Promise<MemoryOverview>;
   };
   browser: {
     open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;

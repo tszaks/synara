@@ -718,6 +718,10 @@ export function createWsNativeApi(): NativeApi {
         };
       },
     },
+    memory: {
+      status: (input) => transport.request(WS_METHODS.memoryStatus, input ?? {}),
+      overview: (input) => transport.request(WS_METHODS.memoryOverview, input ?? {}),
+    },
     browser: {
       open: async (input) => {
         if (window.desktopBridge) {
