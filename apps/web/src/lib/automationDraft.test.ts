@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   acknowledgedWarningIdsForAutomaticChatAutomation,
   acknowledgedRiskIdsForDraft,
+  automationApprovalGaps,
   buildAutomationDraftWarnings,
   hasBlockingAutomationDraftWarnings,
   warningIdsForAcknowledgedRisks,
@@ -189,5 +190,72 @@ describe("automation draft warnings", () => {
 
     expect(warnings.map((warning) => warning.id)).not.toContain("local-checkout");
     expect(warnings.map((warning) => warning.id)).not.toContain("worktree-cleanup");
+  });
+});
+
+describe("automationApprovalGaps", () => {
+  const base = {
+    schedule: { type: "daily" as const, timeOfDay: "09:00" },
+    mode: "standalone" as const,
+    runtimeMode: "approval-required" as const,
+    worktreeMode: "worktree" as const,
+    prompt: "Check the build.",
+  };
+
+  it("requires full-access approval when unacknowledged", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.risks).toEqual(["full-access"]);
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
+  });
+
+  it("requires local-checkout approval for a local worktree", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      worktreeMode: "local",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.risks).toEqual(["local-checkout"]);
+  });
+
+  it("reports both blocking risks together", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      worktreeMode: "local",
+      acknowledgedRisks: [],
+    });
+    expect(new Set(gaps.risks)).toEqual(new Set(["full-access", "local-checkout"]));
+  });
+
+  it("clears once the risks are acknowledged", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      worktreeMode: "local",
+      acknowledgedRisks: ["full-access", "local-checkout"],
+    });
+    expect(gaps.risks).toEqual([]);
+    expect(gaps.warnings).toEqual([]);
+  });
+
+  it("needs no approval for an approval-required worktree automation", () => {
+    const gaps = automationApprovalGaps({ ...base, acknowledgedRisks: [] });
+    expect(gaps.risks).toEqual([]);
+  });
+
+  it("does not treat a fast interval as a run blocker", () => {
+    // fast-interval only caps cadence; it never blocks a run, so an otherwise-approved
+    // automation needs no approval even with a sub-minute interval.
+    const gaps = automationApprovalGaps({
+      ...base,
+      schedule: { type: "interval", everySeconds: 15 },
+      runtimeMode: "full-access",
+      acknowledgedRisks: ["full-access"],
+    });
+    expect(gaps.risks).toEqual([]);
   });
 });
