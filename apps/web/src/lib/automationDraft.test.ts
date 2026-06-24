@@ -252,6 +252,31 @@ describe("automationApprovalGaps", () => {
     expect(gaps.acknowledgedRisks).toEqual([]);
   });
 
+  it("does not block an auto worktree on local-checkout", () => {
+    // worktreeMode "auto" only needs local-checkout if the server fails to create a worktree
+    // at runtime, so a normal auto run must not be flagged or have local-checkout persisted.
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      worktreeMode: "auto",
+      mode: "standalone",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(gaps.acknowledgedRisks).toEqual(["full-access"]);
+  });
+
+  it("needs no approval for an approval-required auto automation", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      worktreeMode: "auto",
+      mode: "standalone",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings).toEqual([]);
+    expect(gaps.acknowledgedRisks).toEqual([]);
+  });
+
   it("does not show a fast interval as a run blocker but persists it on approve", () => {
     // fast-interval never blocks a run, so it is not in the banner warnings. But it must be
     // persisted alongside full-access, or automation.update would reject the sub-minute

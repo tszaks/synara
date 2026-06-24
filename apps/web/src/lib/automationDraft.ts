@@ -153,21 +153,16 @@ export function buildAutomationDraftWarnings(input: {
   return warnings;
 }
 
-// The server refuses to start a run only for these two risks (full-access runtime and a
-// local checkout); fast-interval merely caps the cadence, so it never blocks a run and is
-// intentionally excluded from approval detection.
-const RUN_BLOCKING_WARNING_IDS: ReadonlySet<AutomationDraftWarningId> = new Set([
-  "full-access",
-  "local-checkout",
-]);
-
-// Computes the approval an existing automation still needs before it can run.
-// `warnings` are the run-blocking risks that have not been acknowledged — they drive the
-// approval banner (empty means no approval needed). `acknowledgedRisks` is the full set to
-// persist when approving: every risk the config requires, merged with what is already
-// acknowledged. It includes fast-interval when the schedule is sub-minute, because
-// automation.update revalidates the whole definition and rejects such a schedule unless
-// fast-interval is acknowledged — so a banner approval would otherwise fail to save.
+// Computes the approval an existing automation still needs before it can run, matching the
+// server gate exactly. `warnings` are the run-blocking risks not yet acknowledged and drive
+// the approval banner (empty means no approval is needed). `acknowledgedRisks` is the full
+// set to persist when approving, merged with what is already acknowledged.
+//
+// Only full-access runtime and an explicit local checkout (worktreeMode "local") block a
+// run. worktreeMode "auto" is excluded on purpose: the server needs local-checkout for auto
+// only when it cannot create a worktree at runtime (a conditional fallback), so a normal
+// auto run must not be blocked. fast-interval never blocks a run, but it is still persisted
+// on approve so automation.update (which revalidates a sub-minute schedule) accepts the save.
 export function automationApprovalGaps(input: {
   readonly schedule: AutomationSchedule;
   readonly mode: AutomationMode;
@@ -180,31 +175,34 @@ export function automationApprovalGaps(input: {
   readonly acknowledgedRisks: readonly AutomationAcknowledgedRiskId[];
 } {
   const acknowledged = new Set(input.acknowledgedRisks);
-  const requiredWarnings = buildAutomationDraftWarnings({
-    schedule: input.schedule,
-    mode: input.mode,
-    runtimeMode: input.runtimeMode,
-    worktreeMode: input.worktreeMode,
-    hasEphemeralContext: false,
-    generatedConfidence: null,
-    generatedNeedsConfirmation: false,
-    prompt: input.prompt,
-  }).filter((warning) => warning.requiresAcknowledgement);
-  const warnings = requiredWarnings.filter(
-    (warning) =>
-      RUN_BLOCKING_WARNING_IDS.has(warning.id) &&
-      // full-access and local-checkout warning ids map 1:1 to their risk ids.
-      !acknowledged.has(warning.id as AutomationAcknowledgedRiskId),
+  const required: AutomationAcknowledgedRiskId[] = [];
+  if (input.runtimeMode === "full-access") {
+    required.push("full-access");
+  }
+  if (input.worktreeMode === "local") {
+    required.push("local-checkout");
+  }
+  if (input.schedule.type === "interval" && input.schedule.everySeconds < 60) {
+    required.push("fast-interval");
+  }
+  // Run-blocking risks (everything required except fast-interval) still needing consent.
+  const blocking = new Set(
+    required.filter((risk) => risk !== "fast-interval" && !acknowledged.has(risk)),
   );
-  const acknowledgedRisks = Array.from(
-    new Set([
-      ...input.acknowledgedRisks,
-      ...acknowledgedRiskIdsForDraft(
-        requiredWarnings,
-        new Set(requiredWarnings.map((warning) => warning.id)),
-      ),
-    ]),
-  );
+  const warnings =
+    blocking.size === 0
+      ? []
+      : buildAutomationDraftWarnings({
+          schedule: input.schedule,
+          mode: input.mode,
+          runtimeMode: input.runtimeMode,
+          worktreeMode: input.worktreeMode,
+          hasEphemeralContext: false,
+          generatedConfidence: null,
+          generatedNeedsConfirmation: false,
+          prompt: input.prompt,
+        }).filter((warning) => blocking.has(warning.id as AutomationAcknowledgedRiskId));
+  const acknowledgedRisks = Array.from(new Set([...input.acknowledgedRisks, ...required]));
   return { warnings, acknowledgedRisks };
 }
 
