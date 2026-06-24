@@ -28,8 +28,14 @@ import type {
   AutomationUpdateInput,
 } from "./automation";
 import type {
+  MemoryDecisionList,
+  MemoryFileList,
+  MemoryListDecisionsInput,
+  MemoryListFilesInput,
+  MemoryListSessionsInput,
   MemoryOverview,
   MemoryOverviewInput,
+  MemorySessionList,
   MemoryStatus,
   MemoryStatusInput,
 } from "./memory";
@@ -574,6 +580,9 @@ export interface NativeApi {
   memory: {
     status: (input?: MemoryStatusInput) => Promise<MemoryStatus>;
     overview: (input?: MemoryOverviewInput) => Promise<MemoryOverview>;
+    listFiles: (input?: MemoryListFilesInput) => Promise<MemoryFileList>;
+    listSessions: (input?: MemoryListSessionsInput) => Promise<MemorySessionList>;
+    listDecisions: (input: MemoryListDecisionsInput) => Promise<MemoryDecisionList>;
   };
   browser: {
     open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;

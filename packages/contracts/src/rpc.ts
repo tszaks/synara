@@ -19,7 +19,18 @@ import {
   AutomationUpdateInput,
 } from "./automation";
 import { OpenInEditorInput } from "./editor";
-import { MemoryOverview, MemoryOverviewInput, MemoryStatus, MemoryStatusInput } from "./memory";
+import {
+  MemoryDecisionList,
+  MemoryFileList,
+  MemoryListDecisionsInput,
+  MemoryListFilesInput,
+  MemoryListSessionsInput,
+  MemoryOverview,
+  MemoryOverviewInput,
+  MemorySessionList,
+  MemoryStatus,
+  MemoryStatusInput,
+} from "./memory";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import {
   GitCheckoutInput,
@@ -567,6 +578,24 @@ export const WsMemoryOverviewRpc = Rpc.make(WS_METHODS.memoryOverview, {
   error: WsRpcError,
 });
 
+export const WsMemoryListFilesRpc = Rpc.make(WS_METHODS.memoryListFiles, {
+  payload: MemoryListFilesInput,
+  success: MemoryFileList,
+  error: WsRpcError,
+});
+
+export const WsMemoryListSessionsRpc = Rpc.make(WS_METHODS.memoryListSessions, {
+  payload: MemoryListSessionsInput,
+  success: MemorySessionList,
+  error: WsRpcError,
+});
+
+export const WsMemoryListDecisionsRpc = Rpc.make(WS_METHODS.memoryListDecisions, {
+  payload: MemoryListDecisionsInput,
+  success: MemoryDecisionList,
+  error: WsRpcError,
+});
+
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
   payload: Schema.Struct({}),
   success: ServerRefreshProvidersResult,
@@ -899,4 +928,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsMemorySetEmbeddingApiKeyRpc,
   WsMemoryStatusRpc,
   WsMemoryOverviewRpc,
+  WsMemoryListFilesRpc,
+  WsMemoryListSessionsRpc,
+  WsMemoryListDecisionsRpc,
 );

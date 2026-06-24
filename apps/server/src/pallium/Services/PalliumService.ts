@@ -1,4 +1,11 @@
-import type { PalliumDoctorResult, PalliumStatus, PalliumVersionResult } from "@t3tools/contracts";
+import type {
+  PalliumChangedNowResult,
+  PalliumDecisionList,
+  PalliumDoctorResult,
+  PalliumSessionList,
+  PalliumStatus,
+  PalliumVersionResult,
+} from "@t3tools/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -25,6 +32,25 @@ export interface PalliumServiceShape {
   readonly doctor: (input?: {
     readonly cwd?: string;
   }) => Effect.Effect<PalliumDoctorResult, PalliumServiceError | PalliumUnavailableError>;
+  /** `pallium changed-now <repo> --json`: the working tree's changed files with risk + tests. */
+  readonly changedNow: (input: {
+    readonly cwd: string;
+  }) => Effect.Effect<PalliumChangedNowResult, PalliumServiceError | PalliumUnavailableError>;
+  /**
+   * `pallium sessions list --limit N --json`: a top-level array of recent sessions from the
+   * home-level session DB (NOT repo-scoped).
+   */
+  readonly sessionsList: (input?: {
+    readonly limit?: number;
+  }) => Effect.Effect<PalliumSessionList, PalliumServiceError | PalliumUnavailableError>;
+  /**
+   * `pallium decisions <query> <repo> --json`: a top-level array of decision notes matching `query`.
+   * Pallium requires the query and hardcodes a limit of 10 (see GAP A).
+   */
+  readonly decisions: (input: {
+    readonly query: string;
+    readonly cwd?: string;
+  }) => Effect.Effect<PalliumDecisionList, PalliumServiceError | PalliumUnavailableError>;
 }
 
 export class PalliumService extends ServiceMap.Service<PalliumService, PalliumServiceShape>()(

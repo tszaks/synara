@@ -80,7 +80,13 @@ import {
 } from "./project";
 import { FilesystemBrowseInput } from "./filesystem";
 import { OpenInEditorInput } from "./editor";
-import { MemoryOverviewInput, MemoryStatusInput } from "./memory";
+import {
+  MemoryListDecisionsInput,
+  MemoryListFilesInput,
+  MemoryListSessionsInput,
+  MemoryOverviewInput,
+  MemoryStatusInput,
+} from "./memory";
 import {
   MemorySetEmbeddingApiKeyInput,
   ServerConfigUpdatedPayload,
@@ -221,6 +227,9 @@ export const WS_METHODS = {
   memorySetEmbeddingApiKey: "memory.setEmbeddingApiKey",
   memoryStatus: "memory.status",
   memoryOverview: "memory.overview",
+  memoryListFiles: "memory.listFiles",
+  memoryListSessions: "memory.listSessions",
+  memoryListDecisions: "memory.listDecisions",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -362,6 +371,9 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.memorySetEmbeddingApiKey, MemorySetEmbeddingApiKeyInput),
   tagRequestBody(WS_METHODS.memoryStatus, MemoryStatusInput),
   tagRequestBody(WS_METHODS.memoryOverview, MemoryOverviewInput),
+  tagRequestBody(WS_METHODS.memoryListFiles, MemoryListFilesInput),
+  tagRequestBody(WS_METHODS.memoryListSessions, MemoryListSessionsInput),
+  tagRequestBody(WS_METHODS.memoryListDecisions, MemoryListDecisionsInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({
