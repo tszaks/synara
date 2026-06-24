@@ -521,8 +521,57 @@ describe("composerAutomation", () => {
       expect(prompt).not.toContain("what should this automation do");
     });
 
-    it("defaults to asking for a cadence when nothing was reported", () => {
-      expect(automationClarificationPrompt([])).toContain("How often");
+    it("asks for task and cadence when nothing was reported, so setup can recover", () => {
+      // Empty missingFields (generation timed out/failed) must not loop on cadence for a
+      // bare request that has no task yet.
+      expect(automationClarificationPrompt([])).toContain("what should this automation do");
+    });
+  });
+
+  it("keeps an explicit /automation setup parseable across follow-ups", async () => {
+    const generateIntent = vi.fn(async () => ({
+      isAutomation: true,
+      confidence: 0.9,
+      language: "en",
+      name: null,
+      taskPrompt: null,
+      schedule: { type: "interval" as const, everySeconds: 21_600 },
+      mode: null,
+      completionPolicy: { type: "none" as const },
+      missingFields: ["taskPrompt" as const],
+      needsConfirmation: false,
+      reason: null,
+    }));
+    const first = await resolveComposerAutomationRequest({
+      message: "/automation every 6 hours",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent,
+    });
+    // The marker is stripped, so the carry-forward re-seeds a creation scaffold instead
+    // of leaving a cadence-only fragment that the next turn could not re-detect.
+    expect(first).toMatchObject({
+      type: "needs-clarification",
+      automationMessage: "create an automation every 6 hours",
+    });
+
+    const offline = vi.fn(async () => {
+      throw new Error("deterministic parse should cover the combined request");
+    });
+    const combined = await resolveComposerAutomationRequest({
+      message: "create an automation every 6 hours\ncheck the build",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(combined).toMatchObject({
+      type: "automation",
+      resolution: {
+        intent: {
+          prompt: "check the build",
+          schedule: { type: "interval", everySeconds: 21_600 },
+        },
+      },
     });
   });
 });

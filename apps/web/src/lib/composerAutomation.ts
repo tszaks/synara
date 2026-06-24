@@ -31,6 +31,7 @@ import {
 } from "./automationDraft";
 import {
   detectChatAutomationExecutionScope,
+  ensureAutomationConversationScaffold,
   extractChatAutomationInvocation,
   extractPlainChatAutomationCreationInvocation,
   parseChatAutomationInvocation,
@@ -97,8 +98,11 @@ function stripTrailingAutomationFiller(message: string): string {
 export function automationClarificationPrompt(
   missingFields: readonly ServerAutomationIntentMissingField[],
 ): string {
+  // When the generator could not say what was missing (timeout/failure on a bare
+  // request), ask for both task and schedule so setup can still recover instead of
+  // looping on a cadence-only question that a bare "create an automation" can't answer.
   const fields: readonly ServerAutomationIntentMissingField[] =
-    missingFields.length > 0 ? missingFields : ["schedule"];
+    missingFields.length > 0 ? missingFields : ["taskPrompt", "schedule"];
   if (fields.includes("taskPrompt")) {
     return 'Sure, what should this automation do, and how often should it run? For example: "every weekday at 9am, summarize my open PRs."';
   }
@@ -209,7 +213,11 @@ export async function resolveComposerAutomationRequest(input: {
   if (!automationResolution) {
     return {
       type: "needs-clarification",
-      automationMessage: stripTrailingAutomationFiller(automationMessage),
+      // Strip trailing filler, then guarantee a parseable trigger survives so the next
+      // folded reply still resolves as an automation (markers/cadence-only would not).
+      automationMessage: ensureAutomationConversationScaffold(
+        stripTrailingAutomationFiller(automationMessage),
+      ),
       missingFields: generatedAutomationIntent?.missingFields ?? [],
       reason: generatedAutomationIntent?.reason ?? null,
     };

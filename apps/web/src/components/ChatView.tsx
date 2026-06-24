@@ -1445,6 +1445,10 @@ export default function ChatView({
     accumulatedMessage: string;
     bubbles: ChatMessage[];
   } | null>(null);
+  // Tracks the live thread so an automation resolve that finishes after a thread switch
+  // never commits the old thread's setup onto whatever is now active.
+  const activeThreadIdRef = useRef(threadId);
+  activeThreadIdRef.current = threadId;
   // A composer-local automation setup belongs to the thread it began in; drop it when
   // the active thread changes so the prompt never leaks onto another conversation.
   useEffect(() => {
@@ -6596,11 +6600,17 @@ export default function ChatView({
         cwd: activeProject.cwd,
         generateIntent: (request) => api.server.generateAutomationIntent(request),
       });
+      // If the user switched threads while this resolved, don't commit the old thread's
+      // setup (bubbles/draft) onto whatever is now active.
+      if (activeThreadIdRef.current !== threadId) {
+        return true;
+      }
       if (automationRequest.type !== "normal-chat") {
         if (automationRequest.type === "needs-clarification") {
-          // Conversational setup only runs for prompt-only sends: clearing the composer
-          // would otherwise drop attachments/mentions that Cancel cannot restore.
-          if (!hasPromptOnlySendableContent) {
+          // Conversational setup only runs for prompt-only sends while no turn is live:
+          // clearing the composer would drop attachments/mentions Cancel can't restore,
+          // and ephemeral setup bubbles must not anchor a running turn's work rows.
+          if (!hasPromptOnlySendableContent || hasLiveTurn) {
             toastManager.add({
               type: "warning",
               title: "Automation needs a bit more detail",
@@ -6647,7 +6657,11 @@ export default function ChatView({
         // silently auto-creating a recurring job.
         if (automationDraft.needsDraftReview || conversation !== null) {
           if (conversation !== null) {
-            clearComposerInput(activeThread.id);
+            // Keep the full multi-turn request in the composer so dismissing the review
+            // dialog doesn't lose it (the single-turn path likewise leaves its text).
+            promptRef.current = messageForAutomation;
+            clearComposerDraftContent(activeThread.id);
+            setComposerDraftPrompt(activeThread.id, messageForAutomation);
           }
           setAutomationEditingDefinition(null);
           setAutomationDraftWarningContext(automationDraft.warningContext);
