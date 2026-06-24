@@ -299,16 +299,27 @@ function effectiveMinimumIntervalSeconds(input: {
   return input.minimumIntervalSeconds;
 }
 
+// Single source of truth for the risks an automation must acknowledge before it can run,
+// matched to what actually happens at dispatch. Enforced uniformly at create, update, and
+// run (dispatchRun) so an automation can never reach a run unacknowledged.
 function riskAcknowledgementError(input: {
   readonly runtimeMode: AutomationDefinition["runtimeMode"];
   readonly worktreeMode: AutomationDefinition["worktreeMode"];
+  readonly mode: AutomationDefinition["mode"];
   readonly acknowledgedRisks: readonly string[];
 }): string | null {
   const acknowledgedRisks = new Set(input.acknowledgedRisks);
   if (input.runtimeMode === "full-access" && !acknowledgedRisks.has("full-access")) {
     return "Automation full-access mode requires an explicit acknowledgement.";
   }
-  if (input.worktreeMode === "local" && !acknowledgedRisks.has("local-checkout")) {
+  // Local checkout only applies to standalone runs: heartbeat reuses the target thread and
+  // never resolves an environment, and an "auto" worktree only falls back to a local checkout
+  // at runtime (handled in resolveThreadEnvironment), so it is not required up front.
+  if (
+    input.mode === "standalone" &&
+    input.worktreeMode === "local" &&
+    !acknowledgedRisks.has("local-checkout")
+  ) {
     return "Automation local checkout mode requires an explicit acknowledgement.";
   }
   return null;
@@ -677,6 +688,7 @@ export const AutomationServiceLive = Layer.effect(
     const validateRiskAcknowledgements = (input: {
       readonly runtimeMode: AutomationDefinition["runtimeMode"];
       readonly worktreeMode: AutomationDefinition["worktreeMode"];
+      readonly mode: AutomationDefinition["mode"];
       readonly acknowledgedRisks: readonly string[];
     }) => {
       const message = riskAcknowledgementError(input);
@@ -824,6 +836,17 @@ export const AutomationServiceLive = Layer.effect(
             }),
           );
         }
+
+        // Enforce the acknowledgement gate at dispatch, not just create/update, so an enabled
+        // automation that reached a run unacknowledged (e.g. inserted via the API/DB without
+        // consent) cannot run on schedule or via Run now. Fails before the run is marked
+        // started; the catch at the end of dispatchRun records it as a clean failed run.
+        yield* validateRiskAcknowledgements({
+          runtimeMode: definition.runtimeMode,
+          worktreeMode: definition.worktreeMode,
+          mode: definition.mode,
+          acknowledgedRisks: definition.acknowledgedRisks,
+        });
 
         const stopIfRunCannotDispatch = (latest: AutomationRun, detail: string) =>
           latest.status === "running"
@@ -1841,6 +1864,7 @@ export const AutomationServiceLive = Layer.effect(
         yield* validateRiskAcknowledgements({
           runtimeMode: input.runtimeMode ?? "approval-required",
           worktreeMode: input.worktreeMode ?? "auto",
+          mode: input.mode ?? "standalone",
           acknowledgedRisks: input.acknowledgedRisks ?? [],
         });
         yield* validateHeartbeatTarget({
@@ -1877,6 +1901,7 @@ export const AutomationServiceLive = Layer.effect(
         yield* validateRiskAcknowledgements({
           runtimeMode: updated.runtimeMode,
           worktreeMode: updated.worktreeMode,
+          mode: updated.mode,
           acknowledgedRisks: updated.acknowledgedRisks,
         });
         yield* validateHeartbeatTarget(updated);
