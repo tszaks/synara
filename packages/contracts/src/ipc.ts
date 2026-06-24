@@ -35,6 +35,8 @@ import type {
   MemoryListSessionsInput,
   MemoryOverview,
   MemoryOverviewInput,
+  MemorySearchInput,
+  MemorySearchResultList,
   MemorySessionList,
   MemoryStatus,
   MemoryStatusInput,
@@ -583,6 +585,7 @@ export interface NativeApi {
     listFiles: (input?: MemoryListFilesInput) => Promise<MemoryFileList>;
     listSessions: (input?: MemoryListSessionsInput) => Promise<MemorySessionList>;
     listDecisions: (input: MemoryListDecisionsInput) => Promise<MemoryDecisionList>;
+    search: (input: MemorySearchInput) => Promise<MemorySearchResultList>;
   };
   browser: {
     open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;

@@ -3,6 +3,7 @@ import type {
   PalliumDecisionList,
   PalliumDoctorResult,
   PalliumSessionList,
+  PalliumSessionSearchList,
   PalliumStatus,
   PalliumVersionResult,
 } from "@t3tools/contracts";
@@ -51,6 +52,15 @@ export interface PalliumServiceShape {
     readonly query: string;
     readonly cwd?: string;
   }) => Effect.Effect<PalliumDecisionList, PalliumServiceError | PalliumUnavailableError>;
+  /**
+   * `pallium sessions search <query> [--limit N] --json`: a top-level array of lexical search hits
+   * over the home-level session DB. Uses the default (non-hybrid) search, which is pure lexical and
+   * needs NO embeddings.
+   */
+  readonly sessionsSearch: (input: {
+    readonly query: string;
+    readonly limit?: number;
+  }) => Effect.Effect<PalliumSessionSearchList, PalliumServiceError | PalliumUnavailableError>;
 }
 
 export class PalliumService extends ServiceMap.Service<PalliumService, PalliumServiceShape>()(

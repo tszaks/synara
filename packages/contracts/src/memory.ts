@@ -138,6 +138,23 @@ export type PalliumDecision = typeof PalliumDecision.Type;
 export const PalliumDecisionList = Schema.NullishOr(Schema.Array(PalliumDecision));
 export type PalliumDecisionList = typeof PalliumDecisionList.Type;
 
+// One hit from `pallium sessions search <query> --json` (sessionmemory.SearchResult). The Go struct
+// EMBEDS Session, so its fields (id/title/cwd/…) appear flattened at the top level alongside the
+// search-specific rank/score/signals. We re-use PalliumSession's fields here (all optional except
+// id) and add the three search fields; all three carry `omitempty` in Go, so they are optional. This
+// path is pure lexical (the default, non-hybrid Search) and uses NO embeddings.
+export const PalliumSessionSearchResult = Schema.Struct({
+  ...PalliumSession.fields,
+  rank: Schema.optional(Schema.Number),
+  score: Schema.optional(Schema.Number),
+  signals: Schema.optional(Schema.NullishOr(Schema.Array(Schema.String))),
+});
+export type PalliumSessionSearchResult = typeof PalliumSessionSearchResult.Type;
+
+// `pallium sessions search --json` returns a top-level array of results (no envelope).
+export const PalliumSessionSearchList = Schema.NullishOr(Schema.Array(PalliumSessionSearchResult));
+export type PalliumSessionSearchList = typeof PalliumSessionSearchList.Type;
+
 // --- Memory contract schemas (stable Synara-side shape) ------------------------------------------
 
 // Capabilities the server derives from version + doctor to gate the UI.
@@ -336,3 +353,48 @@ export const MemoryDecisionList = Schema.Struct({
   decisions: Schema.Array(MemoryDecision),
 });
 export type MemoryDecisionList = typeof MemoryDecisionList.Type;
+
+// --- memory.search (lexical session search) ------------------------------------------------------
+//
+// Lexical (keyword) search over the home-level session DB via `pallium sessions search <query>`. It
+// uses the default, NON-hybrid Search, which is pure lexical and needs NO embeddings — so this path
+// works regardless of embedding setup. Sessions live in the home DB, so this is NOT repo-scoped;
+// `projectId` is kept optional for symmetry / future filtering.
+
+// `memory.search` input. `query` is the lexical query. `limit` caps results (Pallium defaults to 10).
+export const MemorySearchInput = Schema.Struct({
+  query: Schema.String,
+  projectId: Schema.optional(ProjectId),
+  limit: Schema.optional(NonNegativeInt),
+});
+export type MemorySearchInput = typeof MemorySearchInput.Type;
+
+// One search hit, surfaced to the UI (mapped from PalliumSessionSearchResult). Carries the same
+// session fields the list view renders, plus the lexical match signals (score/signals). `rank` is a
+// Pallium-internal float (BM25-ish) intentionally not surfaced; `score` is the integer match score.
+export const MemorySearchResult = Schema.Struct({
+  id: Schema.String,
+  title: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+  source: Schema.optional(Schema.String),
+  modelProvider: Schema.optional(Schema.String),
+  model: Schema.optional(Schema.String),
+  gitBranch: Schema.optional(Schema.String),
+  createdAt: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.String),
+  // The integer lexical match score (sessionmemory.SearchResult.score). Omitted when Pallium did not
+  // report one.
+  score: Schema.optional(NonNegativeInt),
+  // Why this session matched (e.g. matched fields/terms). Empty when Pallium reported none.
+  signals: Schema.Array(Schema.String),
+});
+export type MemorySearchResult = typeof MemorySearchResult.Type;
+
+// `memory.search` result. `available: false` mirrors MemoryStatus; the list is empty when Pallium is
+// unavailable, the query is empty, or nothing matched.
+export const MemorySearchResultList = Schema.Struct({
+  available: Schema.Boolean,
+  results: Schema.Array(MemorySearchResult),
+});
+export type MemorySearchResultList = typeof MemorySearchResultList.Type;

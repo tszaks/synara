@@ -6,6 +6,8 @@ import type {
   MemoryListSessionsInput,
   MemoryOverview,
   MemoryOverviewInput,
+  MemorySearchInput,
+  MemorySearchResultList,
   MemorySessionList,
   MemoryStatus,
 } from "@t3tools/contracts";
@@ -58,6 +60,14 @@ export interface MemoryServiceShape {
   readonly listDecisions: (
     input: MemoryListDecisionsInput,
   ) => Effect.Effect<MemoryDecisionList, MemoryServiceError>;
+  /**
+   * Lexical (keyword) search over recent sessions (from `pallium sessions search`). Pure lexical —
+   * works with embeddings OFF. Returns an empty, valid list when Pallium is unavailable or the query
+   * is empty. Cached by query+limit with a TTL backstop.
+   */
+  readonly search: (
+    input: MemorySearchInput,
+  ) => Effect.Effect<MemorySearchResultList, MemoryServiceError>;
 }
 
 export class MemoryService extends ServiceMap.Service<MemoryService, MemoryServiceShape>()(

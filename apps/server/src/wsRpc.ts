@@ -936,6 +936,8 @@ export const makeWsRpcLayer = () =>
           rpcEffect(memoryService.listSessions(input), "Failed to list memory sessions"),
         [WS_METHODS.memoryListDecisions]: (input) =>
           rpcEffect(memoryService.listDecisions(input), "Failed to list memory decisions"),
+        [WS_METHODS.memorySearch]: (input) =>
+          rpcEffect(memoryService.search(input), "Failed to search memory sessions"),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
             providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),

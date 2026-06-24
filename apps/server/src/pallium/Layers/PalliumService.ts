@@ -3,6 +3,7 @@ import {
   PalliumDecisionList,
   PalliumDoctorResult,
   PalliumSessionList,
+  PalliumSessionSearchList,
   type PalliumStatus,
   PalliumVersionResult,
 } from "@t3tools/contracts";
@@ -115,6 +116,27 @@ export const makePalliumServiceLive = (options?: PalliumServiceLiveOptions) =>
           ),
         );
 
+      // `sessions search` takes the query as positional argv after the `search` subcommand, with an
+      // optional `--limit N`. The query is passed as a discrete arg (never interpolated) so it is
+      // never treated as a shell string. This uses the default (non-hybrid) lexical search — no
+      // `--hybrid` flag — so it needs NO embeddings.
+      const sessionsSearch = (input: { readonly query: string; readonly limit?: number }) =>
+        readBinaryPath.pipe(
+          Effect.flatMap((binaryPath) =>
+            runPalliumJson({
+              subcommand: "sessions",
+              schema: PalliumSessionSearchList,
+              binaryPath,
+              args:
+                input.limit !== undefined
+                  ? ["search", input.query, "--limit", String(input.limit)]
+                  : ["search", input.query],
+              ...(options?.spawn ? { spawn: options.spawn } : {}),
+              ...(options?.platform ? { platform: options.platform } : {}),
+            }),
+          ),
+        );
+
       // `decisions` takes the query as the FIRST positional arg, then an optional repo path; both are
       // passed as discrete argv (never interpolated) so a query is never treated as a shell string.
       const decisions = (input: { readonly query: string; readonly cwd?: string }) =>
@@ -213,6 +235,7 @@ export const makePalliumServiceLive = (options?: PalliumServiceLiveOptions) =>
         doctor,
         changedNow,
         sessionsList,
+        sessionsSearch,
         decisions,
       } satisfies PalliumServiceShape;
     }),
