@@ -1442,13 +1442,16 @@ export default function ChatView({
   // in-thread exchange rendered in the transcript until the automation resolves or
   // the user cancels.
   const [pendingAutomationConversation, setPendingAutomationConversation] = useState<{
+    threadId: ThreadId;
     accumulatedMessage: string;
     bubbles: ChatMessage[];
   } | null>(null);
-  // Tracks the live thread so an automation resolve that finishes after a thread switch
-  // never commits the old thread's setup onto whatever is now active.
+  // Tracks the live thread + the live setup so an async automation resolve that finishes
+  // after a thread switch or a cancel never commits a stale result.
   const activeThreadIdRef = useRef(threadId);
   activeThreadIdRef.current = threadId;
+  const pendingAutomationConversationRef = useRef(pendingAutomationConversation);
+  pendingAutomationConversationRef.current = pendingAutomationConversation;
   // A composer-local automation setup belongs to the thread it began in; drop it when
   // the active thread changes so the prompt never leaks onto another conversation.
   useEffect(() => {
@@ -2559,7 +2562,13 @@ export default function ChatView({
           });
 
     // Ephemeral automation-setup bubbles render after everything else, at the tail.
-    const setupBubbles = pendingAutomationConversation?.bubbles ?? [];
+    // Gated on the originating thread so a same-pane switch never leaks the previous
+    // thread's setup into the newly rendered conversation (the reset effect runs after
+    // the first render, so the guard must be here too).
+    const setupBubbles =
+      pendingAutomationConversation && pendingAutomationConversation.threadId === threadId
+        ? pendingAutomationConversation.bubbles
+        : [];
     const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
     const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
     const withPending =
@@ -2572,7 +2581,8 @@ export default function ChatView({
     serverMessages,
     attachmentPreviewHandoffByMessageId,
     optimisticUserMessages,
-    pendingAutomationConversation?.bubbles,
+    pendingAutomationConversation,
+    threadId,
   ]);
   const timelineEntries = useMemo(
     () =>
@@ -6596,9 +6606,12 @@ export default function ChatView({
         cwd: activeProject.cwd,
         generateIntent: (request) => api.server.generateAutomationIntent(request),
       });
-      // If the user switched threads while this resolved, don't commit the old thread's
-      // setup (bubbles/draft) onto whatever is now active.
-      if (activeThreadIdRef.current !== threadId) {
+      // Drop a stale resolve: bail if the user switched threads, or cancelled/changed the
+      // setup, while generateAutomationIntent was awaiting.
+      if (
+        activeThreadIdRef.current !== threadId ||
+        pendingAutomationConversationRef.current !== conversation
+      ) {
         return true;
       }
       if (automationRequest.type !== "normal-chat") {
@@ -6621,15 +6634,20 @@ export default function ChatView({
           // automationMessage accumulates for the next re-resolve and for Cancel's restore.
           const question = automationClarificationPrompt(automationRequest.missingFields);
           const priorBubbles = conversation?.bubbles ?? [];
-          // Clear only the submitted text so a fresh answer can be typed; anything added
-          // while intent generation was resolving (a new attachment, or more typing) is
-          // preserved rather than wiped.
-          if (promptRef.current.trim() === trimmedPromptForSend) {
-            promptRef.current = "";
-            setComposerDraftPrompt(activeThread.id, "");
-            setComposerTrigger(null);
-          }
+          // Drop the submitted request from the composer (it is captured in
+          // accumulatedMessage, so re-folding it would duplicate the scaffold) while
+          // preserving anything typed *after* it during the async resolve.
+          const liveDraft = promptRef.current.trimStart();
+          const leftover = liveDraft.startsWith(trimmedPromptForSend)
+            ? liveDraft.slice(trimmedPromptForSend.length).trimStart()
+            : liveDraft;
+          promptRef.current = leftover;
+          setComposerDraftPrompt(activeThread.id, leftover);
+          setComposerTrigger(null);
+          // Bring the new question into view even if the user had scrolled up.
+          armTranscriptAutoFollow(activeThread.id);
           setPendingAutomationConversation({
+            threadId: activeThread.id,
             accumulatedMessage: automationRequest.automationMessage,
             bubbles: [
               ...priorBubbles,

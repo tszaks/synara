@@ -540,6 +540,12 @@ describe("composerAutomation", () => {
       expect(prompt).not.toContain("what should this automation do");
     });
 
+    it("asks only for the task when the cadence is already known", () => {
+      const prompt = automationClarificationPrompt(["taskPrompt"]);
+      expect(prompt).toContain("What should this automation do");
+      expect(prompt).not.toContain("How often");
+    });
+
     it("asks for task and cadence when nothing was reported, so setup can recover", () => {
       // Empty missingFields (generation timed out/failed) must not loop on cadence for a
       // bare request that has no task yet.
