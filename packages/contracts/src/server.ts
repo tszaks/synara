@@ -441,3 +441,17 @@ export type ServerUpdateSettingsInput = typeof ServerUpdateSettingsInput.Type;
 
 export const ServerUpdateSettingsResult = ServerSettings;
 export type ServerUpdateSettingsResult = typeof ServerUpdateSettingsResult.Type;
+
+// Memory's embedding API key is a credential, so it is written to the server secret store
+// (key "memory-embedding-api-key") and NEVER persisted in settings.json. An empty `apiKey`
+// clears the stored secret.
+export const MemorySetEmbeddingApiKeyInput = Schema.Struct({
+  apiKey: Schema.String.check(Schema.isMaxLength(8192)),
+});
+export type MemorySetEmbeddingApiKeyInput = typeof MemorySetEmbeddingApiKeyInput.Type;
+
+export const MemorySetEmbeddingApiKeyResult = Schema.Struct({
+  // True when a key is now stored, false when the secret was cleared.
+  stored: Schema.Boolean,
+});
+export type MemorySetEmbeddingApiKeyResult = typeof MemorySetEmbeddingApiKeyResult.Type;

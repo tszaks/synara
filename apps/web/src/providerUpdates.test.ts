@@ -67,6 +67,13 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       ...overrides,
     },
     skills: { disabled: [] },
+    memory: {
+      enabled: false,
+      binaryPath: "pallium",
+      embedding: { provider: "ollama", baseUrl: "", model: "nomic-embed-text" },
+      indexingCadence: 15,
+      storageBudgetMb: 512,
+    },
   };
 }
 
