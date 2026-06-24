@@ -85,6 +85,7 @@ import {
   MemoryListFilesInput,
   MemoryListSessionsInput,
   MemoryOverviewInput,
+  MemorySearchInput,
   MemoryStatusInput,
 } from "./memory";
 import {
@@ -230,6 +231,7 @@ export const WS_METHODS = {
   memoryListFiles: "memory.listFiles",
   memoryListSessions: "memory.listSessions",
   memoryListDecisions: "memory.listDecisions",
+  memorySearch: "memory.search",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -374,6 +376,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.memoryListFiles, MemoryListFilesInput),
   tagRequestBody(WS_METHODS.memoryListSessions, MemoryListSessionsInput),
   tagRequestBody(WS_METHODS.memoryListDecisions, MemoryListDecisionsInput),
+  tagRequestBody(WS_METHODS.memorySearch, MemorySearchInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({

@@ -724,6 +724,7 @@ export function createWsNativeApi(): NativeApi {
       listFiles: (input) => transport.request(WS_METHODS.memoryListFiles, input ?? {}),
       listSessions: (input) => transport.request(WS_METHODS.memoryListSessions, input ?? {}),
       listDecisions: (input) => transport.request(WS_METHODS.memoryListDecisions, input),
+      search: (input) => transport.request(WS_METHODS.memorySearch, input),
     },
     browser: {
       open: async (input) => {

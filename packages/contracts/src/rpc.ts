@@ -27,6 +27,8 @@ import {
   MemoryListSessionsInput,
   MemoryOverview,
   MemoryOverviewInput,
+  MemorySearchInput,
+  MemorySearchResultList,
   MemorySessionList,
   MemoryStatus,
   MemoryStatusInput,
@@ -596,6 +598,12 @@ export const WsMemoryListDecisionsRpc = Rpc.make(WS_METHODS.memoryListDecisions,
   error: WsRpcError,
 });
 
+export const WsMemorySearchRpc = Rpc.make(WS_METHODS.memorySearch, {
+  payload: MemorySearchInput,
+  success: MemorySearchResultList,
+  error: WsRpcError,
+});
+
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
   payload: Schema.Struct({}),
   success: ServerRefreshProvidersResult,
@@ -931,4 +939,5 @@ export const WsRpcGroup = RpcGroup.make(
   WsMemoryListFilesRpc,
   WsMemoryListSessionsRpc,
   WsMemoryListDecisionsRpc,
+  WsMemorySearchRpc,
 );

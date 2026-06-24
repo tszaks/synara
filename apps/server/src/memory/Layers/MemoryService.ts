@@ -7,6 +7,9 @@ import {
   type MemoryListSessionsInput,
   MemoryOverview,
   type MemoryOverviewInput,
+  type MemorySearchInput,
+  type MemorySearchResult,
+  MemorySearchResultList,
   type MemorySession,
   MemorySessionList,
   type MemoryStatus,
@@ -14,6 +17,7 @@ import {
   type PalliumDecisionList,
   type PalliumDoctorResult,
   type PalliumSessionList,
+  type PalliumSessionSearchList,
   ProjectId,
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, Ref, Schema } from "effect";
@@ -37,8 +41,10 @@ const OVERVIEW_CACHE_COMMAND = "memory.overview";
 // command+args with the TTL `expires_at` as the sole invalidation backstop, under a constant epoch.
 const SESSIONS_CACHE_COMMAND = "memory.listSessions";
 const DECISIONS_CACHE_COMMAND = "memory.listDecisions";
+const SEARCH_CACHE_COMMAND = "memory.search";
 const SESSIONS_CACHE_TTL_MS = 60_000;
 const DECISIONS_CACHE_TTL_MS = 60_000;
+const SEARCH_CACHE_TTL_MS = 60_000;
 // A fixed epoch for non-repo-epoch-scoped cache rows (sessions). The cache key still requires an
 // epoch, but for home-DB data there is no index epoch, so the TTL alone bounds staleness.
 const HOME_DB_EPOCH = "home-db";
@@ -145,6 +151,30 @@ const decisionsToDecisionList = (decisions: PalliumDecisionList): MemoryDecision
   })),
 });
 
+// Map a Pallium sessions-search list (top-level array of SearchResult) into the stable
+// MemorySearchResultList shape. SearchResult embeds Session, so the session fields are flattened. A
+// null/omitted signals array folds into an empty array; a negative/absent score is dropped (the
+// contract's score is a NonNegativeInt).
+const searchToResultList = (results: PalliumSessionSearchList): MemorySearchResultList => ({
+  available: true,
+  results: (results ?? []).map(
+    (result): MemorySearchResult => ({
+      id: result.id,
+      ...(result.title !== undefined ? { title: result.title } : {}),
+      ...(result.cwd !== undefined ? { cwd: result.cwd } : {}),
+      ...(result.source !== undefined ? { source: result.source } : {}),
+      ...(result.model_provider !== undefined ? { modelProvider: result.model_provider } : {}),
+      ...(result.model !== undefined ? { model: result.model } : {}),
+      ...(result.git_branch !== undefined ? { gitBranch: result.git_branch } : {}),
+      ...(result.created_at !== undefined ? { createdAt: result.created_at } : {}),
+      ...(result.updated_at !== undefined ? { updatedAt: result.updated_at } : {}),
+      ...(result.status !== undefined ? { status: result.status } : {}),
+      ...(result.score !== undefined && result.score >= 0 ? { score: result.score } : {}),
+      signals: [...(result.signals ?? [])],
+    }),
+  ),
+});
+
 // Empty, valid results returned whenever Pallium is unavailable or a project can't be resolved, so
 // read callers never throw.
 const emptyFileList = (available: boolean): MemoryFileList => ({ available, files: [] });
@@ -152,6 +182,10 @@ const emptySessionList = (available: boolean): MemorySessionList => ({ available
 const emptyDecisionList = (available: boolean): MemoryDecisionList => ({
   available,
   decisions: [],
+});
+const emptySearchResultList = (available: boolean): MemorySearchResultList => ({
+  available,
+  results: [],
 });
 
 export const MemoryServiceLive = Layer.effect(
@@ -509,12 +543,64 @@ export const MemoryServiceLive = Layer.effect(
         return result;
       });
 
+    // search maps `pallium sessions search <query>`. Pure LEXICAL (default, non-hybrid) search over
+    // the home-level session DB, so it works regardless of embedding setup. Home-DB scoped (not
+    // repo-epoch scoped), so cached by command+args under a constant epoch with the TTL as the only
+    // backstop. An empty/whitespace query short-circuits to an empty list (Pallium rejects an empty
+    // query; per strict-optional we never reach the binary).
+    const search = (input: MemorySearchInput) =>
+      Effect.gen(function* () {
+        const palliumStatus = yield* pallium.status;
+        if (!palliumStatus.available) {
+          return emptySearchResultList(false);
+        }
+        const query = input.query.trim();
+        if (query.length === 0) {
+          return emptySearchResultList(true);
+        }
+        const now = new Date();
+        const limit = input.limit;
+        const argsKey = limit !== undefined ? `query=${query}&limit=${limit}` : `query=${query}`;
+        const cached = yield* readCachedResult({
+          schema: MemorySearchResultList,
+          command: SEARCH_CACHE_COMMAND,
+          args: argsKey,
+          projectId: GLOBAL_PROJECT_ID,
+          indexEpoch: HOME_DB_EPOCH,
+          now,
+        });
+        if (Option.isSome(cached)) {
+          return cached.value;
+        }
+        const results = yield* pallium
+          .sessionsSearch({ query, ...(limit !== undefined ? { limit } : {}) })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new MemoryServiceError({ message: "Failed to search memory sessions.", cause }),
+            ),
+          );
+        const result = searchToResultList(results);
+        yield* writeCachedResult({
+          schema: MemorySearchResultList,
+          command: SEARCH_CACHE_COMMAND,
+          args: argsKey,
+          projectId: GLOBAL_PROJECT_ID,
+          indexEpoch: HOME_DB_EPOCH,
+          value: result,
+          now,
+          ttlMs: SEARCH_CACHE_TTL_MS,
+        });
+        return result;
+      });
+
     return {
       status,
       overview,
       listFiles,
       listSessions,
       listDecisions,
+      search,
     } satisfies MemoryServiceShape;
   }),
 );
