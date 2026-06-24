@@ -949,7 +949,36 @@ layer("AutomationService", (it) => {
 
       const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
 
-      assert.match(error.message, /fast interval/);
+      assert.match(error.message, /at least \d+ seconds apart/);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+    }),
+  );
+
+  it.effect("blocks an acknowledged but uncapped fast interval run at dispatch", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-fast-interval-uncapped");
+      // Acknowledged sub-minute schedule with the iteration cap removed, inserted around the
+      // create/update policy that enforces the ack + cap as a pair.
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          schedule: { type: "interval", everySeconds: 15 },
+          maxIterations: null,
+          acknowledgedRisks: ["fast-interval"],
+        },
+        now,
+      });
+
+      const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
+
+      assert.match(error.message, /max iterations/);
       assert.strictEqual(
         dispatchedCommands.filter((command) => command.type === "thread.create").length,
         0,
