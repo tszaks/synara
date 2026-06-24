@@ -299,28 +299,37 @@ function effectiveMinimumIntervalSeconds(input: {
   return input.minimumIntervalSeconds;
 }
 
-// Single source of truth for the risks an automation must acknowledge before it can run,
-// matched to what actually happens at dispatch. Enforced uniformly at create, update, and
-// run (dispatchRun) so an automation can never reach a run unacknowledged.
+// Single source of truth for the risks an automation must acknowledge before it can run.
+// Enforced uniformly at create, update, and run (dispatchRun) so an automation can never reach
+// a run unacknowledged. The `local` worktree check applies to every mode: a heartbeat reuses
+// its target thread, but that thread can itself sit on the local checkout, so continuing it
+// still runs the provider against the active project root.
 function riskAcknowledgementError(input: {
   readonly runtimeMode: AutomationDefinition["runtimeMode"];
   readonly worktreeMode: AutomationDefinition["worktreeMode"];
-  readonly mode: AutomationDefinition["mode"];
+  readonly schedule?: AutomationDefinition["schedule"];
   readonly acknowledgedRisks: readonly string[];
+  readonly now?: string;
 }): string | null {
   const acknowledgedRisks = new Set(input.acknowledgedRisks);
   if (input.runtimeMode === "full-access" && !acknowledgedRisks.has("full-access")) {
     return "Automation full-access mode requires an explicit acknowledgement.";
   }
-  // Local checkout only applies to standalone runs: heartbeat reuses the target thread and
-  // never resolves an environment, and an "auto" worktree only falls back to a local checkout
-  // at runtime (handled in resolveThreadEnvironment), so it is not required up front.
-  if (
-    input.mode === "standalone" &&
-    input.worktreeMode === "local" &&
-    !acknowledgedRisks.has("local-checkout")
-  ) {
+  if (input.worktreeMode === "local" && !acknowledgedRisks.has("local-checkout")) {
     return "Automation local checkout mode requires an explicit acknowledgement.";
+  }
+  // Sub-minute schedules can create runaway unattended runs. validateSchedulePolicy enforces
+  // this at create/update; passing schedule+now here lets the dispatch gate enforce it on the
+  // run path too, where validateSchedulePolicy never runs.
+  if (input.schedule !== undefined && input.now !== undefined) {
+    const spacingSeconds = computeAutomationScheduleSpacingSeconds(input.schedule, input.now);
+    if (
+      spacingSeconds !== null &&
+      spacingSeconds < DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS &&
+      !acknowledgedRisks.has("fast-interval")
+    ) {
+      return "Automation fast interval mode requires an explicit acknowledgement.";
+    }
   }
   return null;
 }
@@ -688,8 +697,9 @@ export const AutomationServiceLive = Layer.effect(
     const validateRiskAcknowledgements = (input: {
       readonly runtimeMode: AutomationDefinition["runtimeMode"];
       readonly worktreeMode: AutomationDefinition["worktreeMode"];
-      readonly mode: AutomationDefinition["mode"];
+      readonly schedule?: AutomationDefinition["schedule"];
       readonly acknowledgedRisks: readonly string[];
+      readonly now?: string;
     }) => {
       const message = riskAcknowledgementError(input);
       return message
@@ -839,13 +849,16 @@ export const AutomationServiceLive = Layer.effect(
 
         // Enforce the acknowledgement gate at dispatch, not just create/update, so an enabled
         // automation that reached a run unacknowledged (e.g. inserted via the API/DB without
-        // consent) cannot run on schedule or via Run now. Fails before the run is marked
-        // started; the catch at the end of dispatchRun records it as a clean failed run.
+        // consent) cannot run on schedule or via Run now. Passing schedule+now also covers the
+        // fast-interval risk here, the one run-path that validateSchedulePolicy never guards.
+        // Fails before the run is marked started; the catch at the end of dispatchRun records it
+        // as a clean failed run, and the scheduler has already advanced past this occurrence.
         yield* validateRiskAcknowledgements({
           runtimeMode: definition.runtimeMode,
           worktreeMode: definition.worktreeMode,
-          mode: definition.mode,
+          schedule: definition.schedule,
           acknowledgedRisks: definition.acknowledgedRisks,
+          now,
         });
 
         const stopIfRunCannotDispatch = (latest: AutomationRun, detail: string) =>
@@ -1864,7 +1877,6 @@ export const AutomationServiceLive = Layer.effect(
         yield* validateRiskAcknowledgements({
           runtimeMode: input.runtimeMode ?? "approval-required",
           worktreeMode: input.worktreeMode ?? "auto",
-          mode: input.mode ?? "standalone",
           acknowledgedRisks: input.acknowledgedRisks ?? [],
         });
         yield* validateHeartbeatTarget({
@@ -1901,7 +1913,6 @@ export const AutomationServiceLive = Layer.effect(
         yield* validateRiskAcknowledgements({
           runtimeMode: updated.runtimeMode,
           worktreeMode: updated.worktreeMode,
-          mode: updated.mode,
           acknowledgedRisks: updated.acknowledgedRisks,
         });
         yield* validateHeartbeatTarget(updated);
