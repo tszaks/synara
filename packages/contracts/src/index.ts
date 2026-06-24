@@ -1,6 +1,7 @@
 export * from "./auth";
 export * from "./automation";
 export * from "./baseSchemas";
+export * from "./memory";
 export * from "./ipc";
 export * from "./terminal";
 export * from "./provider";
