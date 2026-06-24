@@ -938,6 +938,15 @@ export const makeWsRpcLayer = () =>
           rpcEffect(memoryService.listDecisions(input), "Failed to list memory decisions"),
         [WS_METHODS.memorySearch]: (input) =>
           rpcEffect(memoryService.search(input), "Failed to search memory sessions"),
+        [WS_METHODS.memorySearchSemantic]: (input) =>
+          rpcEffect(
+            memoryService.searchSemantic(input),
+            "Failed to semantically search memory sessions",
+          ),
+        [WS_METHODS.memoryIndex]: (input) =>
+          rpcEffect(memoryService.index(input), "Failed to index memory"),
+        [WS_METHODS.memoryEmbedSessions]: (input) =>
+          rpcEffect(memoryService.embedSessions(input), "Failed to embed memory sessions"),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
             providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),

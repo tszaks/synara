@@ -83,6 +83,11 @@ export type PalliumSpawn = (
     // codex spawn path. `shell: true` would re-open a command-string injection surface on Windows.
     readonly shell: false;
     readonly windowsHide?: true;
+    // The child's environment. When the caller passes an `env` map, it is merged OVER process.env so
+    // the parent's PATH/HOME/etc. survive and only the caller's keys (e.g. PALLIUM_EMBED_*) are
+    // added/overridden. A secret carried here (the embedding api key) goes ONLY into the child env;
+    // it is never logged, and redactSecrets covers anything the child echoes back.
+    readonly env?: NodeJS.ProcessEnv;
   },
 ) => PalliumSpawnedProcess;
 
@@ -96,6 +101,12 @@ export interface RunPalliumJsonInput<A, I> {
   readonly schema: Schema.Codec<A, I>;
   /** Resolved binary path; defaults to the Memory `binaryPath` setting or "pallium". */
   readonly binaryPath?: string;
+  /**
+   * Extra environment variables for the child, merged OVER process.env (so PATH/HOME survive). Used
+   * to pass the embedding config (PALLIUM_EMBED_PROVIDER/_BASE_URL/_MODEL/_API_KEY) to the binary.
+   * A secret carried here goes only into the child env; it is never logged.
+   */
+  readonly env?: NodeJS.ProcessEnv;
   /** Test seam: defaults to `node:child_process` spawn. */
   readonly spawn?: PalliumSpawn;
   /** Test seam: defaults to `process.platform`. */
@@ -124,6 +135,7 @@ function spawnPallium(input: {
   readonly cwd?: string;
   readonly signal?: AbortSignal;
   readonly timeoutMs: number;
+  readonly env?: NodeJS.ProcessEnv;
   readonly spawn: PalliumSpawn;
   readonly platform: NodeJS.Platform;
 }): Effect.Effect<PalliumRawResult, PalliumServiceError | PalliumUnavailableError> {
@@ -149,6 +161,10 @@ function spawnPallium(input: {
           ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
           stdio: ["ignore", "pipe", "pipe"],
           shell: false,
+          // Merge the caller's env OVER process.env so PATH/HOME/etc. survive and only the caller's
+          // keys (e.g. the embedding config + api key) are added. Omit entirely when no extra env is
+          // passed so the child simply inherits the parent's environment.
+          ...(input.env !== undefined ? { env: { ...process.env, ...input.env } } : {}),
           ...(prepared.windowsHide ? { windowsHide: prepared.windowsHide } : {}),
         });
       } catch (cause) {
@@ -297,6 +313,7 @@ export function runPalliumJson<A, I>(
     argv,
     ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    ...(input.env !== undefined ? { env: input.env } : {}),
     timeoutMs,
     spawn,
     platform,

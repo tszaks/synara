@@ -1,7 +1,11 @@
 import {
   MemoryDecisionList,
+  type MemoryEmbedInput,
+  type MemoryEmbedResult,
   type MemoryFile,
   MemoryFileList,
+  type MemoryIndexInput,
+  type MemoryIndexResult,
   type MemoryListDecisionsInput,
   type MemoryListFilesInput,
   type MemoryListSessionsInput,
@@ -10,14 +14,18 @@ import {
   type MemorySearchInput,
   type MemorySearchResult,
   MemorySearchResultList,
+  type MemorySearchSemanticInput,
   type MemorySession,
   MemorySessionList,
   type MemoryStatus,
   type PalliumChangedNowResult,
   type PalliumDecisionList,
   type PalliumDoctorResult,
+  type PalliumEmbedResult,
+  type PalliumIndexResult,
   type PalliumSessionList,
   type PalliumSessionSearchList,
+  type PalliumSessionSemanticList,
   ProjectId,
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, Ref, Schema } from "effect";
@@ -42,9 +50,11 @@ const OVERVIEW_CACHE_COMMAND = "memory.overview";
 const SESSIONS_CACHE_COMMAND = "memory.listSessions";
 const DECISIONS_CACHE_COMMAND = "memory.listDecisions";
 const SEARCH_CACHE_COMMAND = "memory.search";
+const SEMANTIC_CACHE_COMMAND = "memory.searchSemantic";
 const SESSIONS_CACHE_TTL_MS = 60_000;
 const DECISIONS_CACHE_TTL_MS = 60_000;
 const SEARCH_CACHE_TTL_MS = 60_000;
+const SEMANTIC_CACHE_TTL_MS = 60_000;
 // A fixed epoch for non-repo-epoch-scoped cache rows (sessions). The cache key still requires an
 // epoch, but for home-DB data there is no index epoch, so the TTL alone bounds staleness.
 const HOME_DB_EPOCH = "home-db";
@@ -120,6 +130,17 @@ const changedNowToFileList = (report: PalliumChangedNowResult): MemoryFileList =
   ),
 });
 
+// Map a Pallium index.Result into the stable MemoryIndexResult shape. Counts are clamped to >= 0
+// (the contract uses NonNegativeInt) and a missing count folds to 0.
+const indexToIndexResult = (result: PalliumIndexResult): MemoryIndexResult => ({
+  repoRoot: result.repo_root,
+  ...(result.branch !== undefined ? { branch: result.branch } : {}),
+  commitCount: Math.max(0, result.commit_count ?? 0),
+  fileCount: Math.max(0, result.file_count ?? 0),
+  cochangeEdgeCount: Math.max(0, result.cochange_edge_count ?? 0),
+  ...(result.indexed_at !== undefined ? { indexedAt: result.indexed_at } : {}),
+});
+
 // Map a Pallium sessions list (top-level array) into the stable MemorySessionList shape.
 const sessionsToSessionList = (sessions: PalliumSessionList): MemorySessionList => ({
   available: true,
@@ -173,6 +194,41 @@ const searchToResultList = (results: PalliumSessionSearchList): MemorySearchResu
       signals: [...(result.signals ?? [])],
     }),
   ),
+});
+
+// Map a Pallium sessions-semantic list (top-level array of SemanticResult) into the SAME stable
+// MemorySearchResultList shape lexical search uses, so the UI renders both identically. SemanticResult
+// embeds Session, so the session fields are flattened. The vector similarity is a float in [0,1]
+// rather than the integer match score the contract's `score` carries, so it is intentionally NOT
+// mapped into `score` (which is a NonNegativeInt); only an explicit non-negative integer `score`, if
+// Pallium emits one, is surfaced. signals fold to empty.
+const semanticToResultList = (results: PalliumSessionSemanticList): MemorySearchResultList => ({
+  available: true,
+  results: (results ?? []).map(
+    (result): MemorySearchResult => ({
+      id: result.id,
+      ...(result.title !== undefined ? { title: result.title } : {}),
+      ...(result.cwd !== undefined ? { cwd: result.cwd } : {}),
+      ...(result.source !== undefined ? { source: result.source } : {}),
+      ...(result.model_provider !== undefined ? { modelProvider: result.model_provider } : {}),
+      ...(result.model !== undefined ? { model: result.model } : {}),
+      ...(result.git_branch !== undefined ? { gitBranch: result.git_branch } : {}),
+      ...(result.created_at !== undefined ? { createdAt: result.created_at } : {}),
+      ...(result.updated_at !== undefined ? { updatedAt: result.updated_at } : {}),
+      ...(result.status !== undefined ? { status: result.status } : {}),
+      ...(result.score !== undefined && Number.isInteger(result.score) && result.score >= 0
+        ? { score: result.score }
+        : {}),
+      signals: [],
+    }),
+  ),
+});
+
+// Map a Pallium embed result into the stable MemoryEmbedResult shape. `embedded` is clamped to >= 0
+// (the contract uses NonNegativeInt).
+const embedToEmbedResult = (result: PalliumEmbedResult): MemoryEmbedResult => ({
+  embedded: Math.max(0, result.embedded),
+  ...(result.model !== undefined ? { model: result.model } : {}),
 });
 
 // Empty, valid results returned whenever Pallium is unavailable or a project can't be resolved, so
@@ -594,6 +650,160 @@ export const MemoryServiceLive = Layer.effect(
         return result;
       });
 
+    // searchSemantic maps `pallium sessions semantic <query>`. Unlike lexical search it REQUIRES
+    // embeddings, so it is gated on status.capabilities.embeddings. Per the strict-optional rule it is
+    // still a READ: when embeddings are not available (or query is empty) it returns an empty, valid
+    // list so the UI can fall back to lexical, rather than throwing. The embedding provider/model/key
+    // are passed to the Pallium child by PalliumService (never over the WS surface). Home-DB scoped,
+    // so cached by command+args under a constant epoch with the TTL as the only backstop.
+    const searchSemantic = (input: MemorySearchSemanticInput) =>
+      Effect.gen(function* () {
+        const palliumStatus = yield* pallium.status;
+        if (!palliumStatus.available) {
+          return emptySearchResultList(false);
+        }
+        // Gate on the embeddings capability: with no embedding space there is nothing to search.
+        // Returning available-but-empty lets the UI fall back to lexical search instead of erroring.
+        if (!palliumStatus.capabilities.embeddings) {
+          return emptySearchResultList(true);
+        }
+        const query = input.query.trim();
+        if (query.length === 0) {
+          return emptySearchResultList(true);
+        }
+        const now = new Date();
+        const limit = input.limit;
+        const argsKey = limit !== undefined ? `query=${query}&limit=${limit}` : `query=${query}`;
+        const cached = yield* readCachedResult({
+          schema: MemorySearchResultList,
+          command: SEMANTIC_CACHE_COMMAND,
+          args: argsKey,
+          projectId: GLOBAL_PROJECT_ID,
+          indexEpoch: HOME_DB_EPOCH,
+          now,
+        });
+        if (Option.isSome(cached)) {
+          return cached.value;
+        }
+        const results = yield* pallium
+          .sessionsSemantic({ query, ...(limit !== undefined ? { limit } : {}) })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new MemoryServiceError({
+                  message: "Failed to semantically search memory sessions.",
+                  cause,
+                }),
+            ),
+          );
+        const result = semanticToResultList(results);
+        yield* writeCachedResult({
+          schema: MemorySearchResultList,
+          command: SEMANTIC_CACHE_COMMAND,
+          args: argsKey,
+          projectId: GLOBAL_PROJECT_ID,
+          indexEpoch: HOME_DB_EPOCH,
+          value: result,
+          now,
+          ttlMs: SEMANTIC_CACHE_TTL_MS,
+        });
+        return result;
+      });
+
+    // index re-runs `pallium index <repo>` (MUTATING). Per the strict-optional rule, mutating
+    // methods FAIL FAST with a typed MemoryServiceError when Pallium is unavailable (they do NOT
+    // fold absence into an empty result like the read methods). On success it invalidates every
+    // stale cache epoch for the project AND clears the in-process epoch memo for it, so the next
+    // overview re-probes doctor and reflects the fresh index immediately rather than waiting on the
+    // TTL backstop. This closes the staleness window between a re-index and the UI catching up.
+    const index = (input: MemoryIndexInput) =>
+      Effect.gen(function* () {
+        const palliumStatus = yield* pallium.status;
+        if (!palliumStatus.available) {
+          return yield* Effect.fail(
+            new MemoryServiceError({
+              message: palliumStatus.reason ?? "Pallium is not available; cannot index memory.",
+            }),
+          );
+        }
+        const repoPathOption = yield* resolveRepoPath(input.projectId);
+        if (Option.isNone(repoPathOption)) {
+          return yield* Effect.fail(
+            new MemoryServiceError({
+              message: "Cannot index memory: project could not be resolved to a repo.",
+            }),
+          );
+        }
+        const repoPath = repoPathOption.value;
+        const indexResult = yield* pallium
+          .index({ cwd: repoPath })
+          .pipe(
+            Effect.mapError(
+              (cause) => new MemoryServiceError({ message: "Failed to index memory.", cause }),
+            ),
+          );
+
+        // Learn the authoritative current epoch from a fresh doctor probe so the invalidation key
+        // matches exactly what `overview` will compute next. A doctor failure here must not fail the
+        // index (the index itself succeeded), so fall back to the index result's indexed_at and let
+        // the TTL backstop cover the rare identical-epoch case.
+        const currentEpoch = yield* pallium.doctor({ cwd: repoPath }).pipe(
+          Effect.map(epochFromDoctor),
+          Effect.catchCause(() =>
+            Effect.succeed(indexResult.indexed_at ?? `index:${repoPath}:${Date.now()}`),
+          ),
+        );
+
+        // Drop every cached row for this project whose epoch differs from the fresh one.
+        yield* cache
+          .invalidateStaleEpochs({ projectId: input.projectId, currentIndexEpoch: currentEpoch })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new MemoryServiceError({
+                  message: "Failed to invalidate memory cache after index.",
+                  cause,
+                }),
+            ),
+          );
+        // Clear the in-process epoch memo for this project so the next overview re-probes doctor and
+        // re-learns the epoch rather than short-circuiting on a stale remembered one.
+        yield* Ref.update(lastEpochByProject, (map) => {
+          const next = new Map(map);
+          next.delete(input.projectId);
+          return next;
+        });
+
+        return indexToIndexResult(indexResult);
+      });
+
+    // embedSessions re-runs `pallium sessions embed` (MUTATING). Per the strict-optional rule, mutating
+    // methods FAIL FAST with a typed MemoryServiceError when Pallium is unavailable (they do NOT fold
+    // absence into an empty result like the read methods). The embedding provider/model/key are passed
+    // to the Pallium child by PalliumService (never over the WS surface). `input` carries no args; the
+    // config is entirely server-side, so Synara cannot be made to embed against an unexpected provider.
+    const embedSessions = (_input: MemoryEmbedInput) =>
+      Effect.gen(function* () {
+        const palliumStatus = yield* pallium.status;
+        if (!palliumStatus.available) {
+          return yield* Effect.fail(
+            new MemoryServiceError({
+              message:
+                palliumStatus.reason ?? "Pallium is not available; cannot embed memory sessions.",
+            }),
+          );
+        }
+        const result = yield* pallium
+          .sessionsEmbed()
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new MemoryServiceError({ message: "Failed to embed memory sessions.", cause }),
+            ),
+          );
+        return embedToEmbedResult(result);
+      });
+
     return {
       status,
       overview,
@@ -601,6 +811,9 @@ export const MemoryServiceLive = Layer.effect(
       listSessions,
       listDecisions,
       search,
+      searchSemantic,
+      index,
+      embedSessions,
     } satisfies MemoryServiceShape;
   }),
 );

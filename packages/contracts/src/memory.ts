@@ -96,6 +96,20 @@ export const PalliumChangedNowResult = Schema.Struct({
 });
 export type PalliumChangedNowResult = typeof PalliumChangedNowResult.Type;
 
+// `pallium index <repo> --json` (index.Result). Re-running `index` rebuilds the repo's index and
+// returns these counts. `indexed_at` is RFC3339 and changes every run, so it doubles as the fresh
+// index epoch. Kept lenient (counts are plain Number, `indexed_at` plain String) so a Pallium shape
+// change can't break decoding.
+export const PalliumIndexResult = Schema.Struct({
+  repo_root: Schema.String,
+  branch: Schema.optional(Schema.String),
+  commit_count: Schema.optional(Schema.Number),
+  file_count: Schema.optional(Schema.Number),
+  cochange_edge_count: Schema.optional(Schema.Number),
+  indexed_at: Schema.optional(Schema.String),
+});
+export type PalliumIndexResult = typeof PalliumIndexResult.Type;
+
 // One session from `pallium sessions list --json` (sessionmemory.Session). The command emits a
 // top-level array of these. Only id/title/timestamps/cwd are surfaced to the UI today; the rest are
 // decoded leniently (optional) so a new/removed Pallium column can't break the list.
@@ -154,6 +168,37 @@ export type PalliumSessionSearchResult = typeof PalliumSessionSearchResult.Type;
 // `pallium sessions search --json` returns a top-level array of results (no envelope).
 export const PalliumSessionSearchList = Schema.NullishOr(Schema.Array(PalliumSessionSearchResult));
 export type PalliumSessionSearchList = typeof PalliumSessionSearchList.Type;
+
+// One hit from `pallium sessions semantic <query> --json` (sessionmemory.SemanticResult). Like the
+// lexical SearchResult, the Go struct EMBEDS Session, so its fields appear flattened at the top
+// level alongside the vector-similarity fields. `similarity`/`distance`/`score` carry `omitempty`
+// in Go and Pallium versions differ on which they emit, so all are optional. This path is SEMANTIC
+// (vector) search and requires embeddings; vectors are partitioned by (provider, model) so a result
+// only ever comes from the embedding space the query was run against.
+export const PalliumSessionSemanticResult = Schema.Struct({
+  ...PalliumSession.fields,
+  similarity: Schema.optional(Schema.Number),
+  distance: Schema.optional(Schema.Number),
+  score: Schema.optional(Schema.Number),
+});
+export type PalliumSessionSemanticResult = typeof PalliumSessionSemanticResult.Type;
+
+// `pallium sessions semantic --json` returns a top-level array of results (no envelope).
+export const PalliumSessionSemanticList = Schema.NullishOr(
+  Schema.Array(PalliumSessionSemanticResult),
+);
+export type PalliumSessionSemanticList = typeof PalliumSessionSemanticList.Type;
+
+// `pallium sessions embed [--model …] --json` (the embed result). Embeds any backlog into the
+// configured (provider, model) space and reports how many were embedded and which model was used.
+// Kept lenient (count is plain Number, model plain String, session_id optional) so a Pallium shape
+// change can't break decoding.
+export const PalliumEmbedResult = Schema.Struct({
+  embedded: Schema.Number,
+  model: Schema.optional(Schema.String),
+  session_id: Schema.optional(Schema.String),
+});
+export type PalliumEmbedResult = typeof PalliumEmbedResult.Type;
 
 // --- Memory contract schemas (stable Synara-side shape) ------------------------------------------
 
@@ -398,3 +443,76 @@ export const MemorySearchResultList = Schema.Struct({
   results: Schema.Array(MemorySearchResult),
 });
 export type MemorySearchResultList = typeof MemorySearchResultList.Type;
+
+// --- memory.index (mutate) -----------------------------------------------------------------------
+//
+// Re-runs `pallium index <repo>` to rebuild the project's index, then invalidates every stale cache
+// epoch so a subsequent overview reflects the fresh index immediately. Unlike the read methods, this
+// is MUTATING: when Pallium is unavailable it FAILS FAST with a typed error rather than returning an
+// empty result.
+
+// `memory.index` input. A project is REQUIRED (there is nothing to index without a repo path).
+export const MemoryIndexInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type MemoryIndexInput = typeof MemoryIndexInput.Type;
+
+// `memory.index` result: the counts the index run produced, mapped from PalliumIndexResult. Surfaced
+// so the UI can confirm what was indexed (e.g. "Indexed 120 commits, 340 files").
+export const MemoryIndexResult = Schema.Struct({
+  repoRoot: Schema.String,
+  branch: Schema.optional(Schema.String),
+  commitCount: NonNegativeInt,
+  fileCount: NonNegativeInt,
+  cochangeEdgeCount: NonNegativeInt,
+  // The fresh index time (index.Result.indexed_at), which also became the new cache epoch.
+  indexedAt: Schema.optional(Schema.String),
+});
+export type MemoryIndexResult = typeof MemoryIndexResult.Type;
+
+// --- memory.searchSemantic (vector session search) -----------------------------------------------
+//
+// Semantic (vector) search over recent sessions via `pallium sessions semantic <query>`. Unlike
+// lexical search, this REQUIRES embeddings: the server passes the configured embedding
+// provider/baseUrl/model (from settings.memory.embedding) and the api key (from the secret store) to
+// the Pallium child as PALLIUM_EMBED_* env vars, and the embedding space is partitioned by
+// (provider, model). Per the strict-optional rule this is still a READ: when embeddings are not
+// available the server returns an empty-but-valid list rather than throwing, so the UI can fall back
+// to lexical search instead of showing an error.
+
+// `memory.searchSemantic` input. `query` is the natural-language query. `limit` caps results.
+// Sessions live in the home DB, so this is NOT repo-scoped; `projectId` is kept optional for
+// symmetry / future filtering. It deliberately mirrors MemorySearchInput so the UI can toggle
+// lexical <-> semantic without reshaping the request.
+export const MemorySearchSemanticInput = Schema.Struct({
+  query: Schema.String,
+  projectId: Schema.optional(ProjectId),
+  limit: Schema.optional(NonNegativeInt),
+});
+export type MemorySearchSemanticInput = typeof MemorySearchSemanticInput.Type;
+
+// Semantic search reuses the lexical result shape (MemorySearchResult / MemorySearchResultList) so
+// the UI renders both the same way. The mapper maps Pallium's similarity/distance into the same
+// optional `score` field.
+
+// --- memory.embedSessions (mutate) ---------------------------------------------------------------
+//
+// Embeds any un-embedded session backlog into the configured (provider, model) space via
+// `pallium sessions embed`. The embedding provider/baseUrl/model come from settings.memory.embedding
+// and the api key from the secret store; both are passed to the Pallium child as PALLIUM_EMBED_* env
+// vars. Unlike the read methods, this is MUTATING: when Pallium is unavailable it FAILS FAST with a
+// typed error rather than returning an empty result.
+
+// `memory.embedSessions` input. Takes no arguments: the provider/model/key are server-side config
+// (settings + secret store), never client-supplied, so Synara structurally cannot be made to embed
+// against an unexpected provider or leak a key over the wire.
+export const MemoryEmbedInput = Schema.Struct({});
+export type MemoryEmbedInput = typeof MemoryEmbedInput.Type;
+
+// `memory.embedSessions` result, mapped from PalliumEmbedResult. `embedded` is how many sessions
+// were embedded this run; `model` is the embedding model they were embedded into.
+export const MemoryEmbedResult = Schema.Struct({
+  embedded: NonNegativeInt,
+  model: Schema.optional(Schema.String),
+});
+export type MemoryEmbedResult = typeof MemoryEmbedResult.Type;
