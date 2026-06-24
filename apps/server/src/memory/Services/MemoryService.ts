@@ -1,6 +1,10 @@
 import type {
   MemoryDecisionList,
+  MemoryEmbedInput,
+  MemoryEmbedResult,
   MemoryFileList,
+  MemoryIndexInput,
+  MemoryIndexResult,
   MemoryListDecisionsInput,
   MemoryListFilesInput,
   MemoryListSessionsInput,
@@ -8,6 +12,7 @@ import type {
   MemoryOverviewInput,
   MemorySearchInput,
   MemorySearchResultList,
+  MemorySearchSemanticInput,
   MemorySessionList,
   MemoryStatus,
 } from "@t3tools/contracts";
@@ -68,6 +73,33 @@ export interface MemoryServiceShape {
   readonly search: (
     input: MemorySearchInput,
   ) => Effect.Effect<MemorySearchResultList, MemoryServiceError>;
+  /**
+   * Semantic (vector) search over recent sessions (from `pallium sessions semantic`). Reuses the
+   * lexical result shape so the UI renders both the same way. Per the strict-optional rule this is a
+   * READ: it is gated on `status.capabilities.embeddings`, and when embeddings are NOT available it
+   * returns an empty, valid list (so the UI can fall back to lexical) rather than throwing. The
+   * embedding provider/model/key are server-side config passed to the Pallium child by
+   * PalliumService; they never travel over the WS surface.
+   */
+  readonly searchSemantic: (
+    input: MemorySearchSemanticInput,
+  ) => Effect.Effect<MemorySearchResultList, MemoryServiceError>;
+  /**
+   * Embed the un-embedded session backlog (from `pallium sessions embed`). MUTATING: like `index`,
+   * this FAILS FAST with a MemoryServiceError when Pallium is unavailable (it does NOT fold absence
+   * into an empty result). The embedding provider/model/key are server-side config passed to the
+   * Pallium child by PalliumService.
+   */
+  readonly embedSessions: (
+    input: MemoryEmbedInput,
+  ) => Effect.Effect<MemoryEmbedResult, MemoryServiceError>;
+  /**
+   * Re-index a project (from `pallium index`). MUTATING: unlike the read methods, this FAILS FAST
+   * with a MemoryServiceError when Pallium is unavailable rather than returning an empty result. On
+   * success it invalidates every stale cache epoch for the project and clears the in-process epoch
+   * memo so the next overview re-probes doctor and reflects the fresh index immediately.
+   */
+  readonly index: (input: MemoryIndexInput) => Effect.Effect<MemoryIndexResult, MemoryServiceError>;
 }
 
 export class MemoryService extends ServiceMap.Service<MemoryService, MemoryServiceShape>()(

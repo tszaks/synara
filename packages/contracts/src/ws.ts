@@ -81,11 +81,14 @@ import {
 import { FilesystemBrowseInput } from "./filesystem";
 import { OpenInEditorInput } from "./editor";
 import {
+  MemoryEmbedInput,
+  MemoryIndexInput,
   MemoryListDecisionsInput,
   MemoryListFilesInput,
   MemoryListSessionsInput,
   MemoryOverviewInput,
   MemorySearchInput,
+  MemorySearchSemanticInput,
   MemoryStatusInput,
 } from "./memory";
 import {
@@ -232,6 +235,9 @@ export const WS_METHODS = {
   memoryListSessions: "memory.listSessions",
   memoryListDecisions: "memory.listDecisions",
   memorySearch: "memory.search",
+  memorySearchSemantic: "memory.searchSemantic",
+  memoryIndex: "memory.index",
+  memoryEmbedSessions: "memory.embedSessions",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -377,6 +383,9 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.memoryListSessions, MemoryListSessionsInput),
   tagRequestBody(WS_METHODS.memoryListDecisions, MemoryListDecisionsInput),
   tagRequestBody(WS_METHODS.memorySearch, MemorySearchInput),
+  tagRequestBody(WS_METHODS.memorySearchSemantic, MemorySearchSemanticInput),
+  tagRequestBody(WS_METHODS.memoryIndex, MemoryIndexInput),
+  tagRequestBody(WS_METHODS.memoryEmbedSessions, MemoryEmbedInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({

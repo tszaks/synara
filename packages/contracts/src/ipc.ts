@@ -29,7 +29,11 @@ import type {
 } from "./automation";
 import type {
   MemoryDecisionList,
+  MemoryEmbedInput,
+  MemoryEmbedResult,
   MemoryFileList,
+  MemoryIndexInput,
+  MemoryIndexResult,
   MemoryListDecisionsInput,
   MemoryListFilesInput,
   MemoryListSessionsInput,
@@ -37,6 +41,7 @@ import type {
   MemoryOverviewInput,
   MemorySearchInput,
   MemorySearchResultList,
+  MemorySearchSemanticInput,
   MemorySessionList,
   MemoryStatus,
   MemoryStatusInput,
@@ -586,6 +591,9 @@ export interface NativeApi {
     listSessions: (input?: MemoryListSessionsInput) => Promise<MemorySessionList>;
     listDecisions: (input: MemoryListDecisionsInput) => Promise<MemoryDecisionList>;
     search: (input: MemorySearchInput) => Promise<MemorySearchResultList>;
+    searchSemantic: (input: MemorySearchSemanticInput) => Promise<MemorySearchResultList>;
+    index: (input: MemoryIndexInput) => Promise<MemoryIndexResult>;
+    embedSessions: (input: MemoryEmbedInput) => Promise<MemoryEmbedResult>;
   };
   browser: {
     open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;

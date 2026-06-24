@@ -10,6 +10,7 @@ import { assert, it } from "@effect/vitest";
 import { PalliumVersionResult } from "@t3tools/contracts";
 import { Cause, Effect, Exit, Layer, Schema } from "effect";
 
+import { ServerSecretStore } from "../auth/Services/ServerSecretStore.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { PalliumServiceError } from "./Errors.ts";
 import { makePalliumServiceLive } from "./Layers/PalliumService.ts";
@@ -99,9 +100,21 @@ const DOCTOR_JSON = JSON.stringify({
   openai_key_available: true,
 });
 
-function layerWith(run: FakeRun) {
+// A minimal in-memory ServerSecretStore. The semantic/embed runners read the embedding api key from
+// here; `seed` pre-populates a stored key. The store never touches disk.
+const makeFakeSecretStoreLayer = (seed?: Record<string, string>) =>
+  Layer.succeed(ServerSecretStore, {
+    get: (name: string) =>
+      Effect.succeed(seed?.[name] ? new TextEncoder().encode(seed[name]) : null),
+    set: () => Effect.void,
+    getOrCreateRandom: () => Effect.succeed(new Uint8Array()),
+    remove: () => Effect.void,
+  });
+
+function layerWith(run: FakeRun, seed?: Record<string, string>) {
   return makePalliumServiceLive({ spawn: makeFakeSpawn(run), platform: "linux" }).pipe(
     Layer.provide(ServerSettingsService.layerTest()),
+    Layer.provide(makeFakeSecretStoreLayer(seed)),
   );
 }
 
@@ -159,7 +172,10 @@ it.effect("status maps version + doctor into available:true capabilities", () =>
           return child;
         }) satisfies PalliumSpawn,
         platform: "linux",
-      }).pipe(Layer.provide(ServerSettingsService.layerTest())),
+      }).pipe(
+        Layer.provide(ServerSettingsService.layerTest()),
+        Layer.provide(makeFakeSecretStoreLayer()),
+      ),
     ),
   ),
 );
@@ -244,5 +260,100 @@ it.effect("redacts a secret echoed in non-JSON stdout from message AND cause", (
     const palliumError = error as PalliumServiceError;
     assert.notInclude(palliumError.message, secret);
     assert.notInclude(JSON.stringify(palliumError.cause ?? ""), secret);
+  }),
+);
+
+// --- semantic search + embed (multi-provider) ----------------------------------------------------
+
+const SEMANTIC_JSON = JSON.stringify([
+  { id: "sess-1", title: "Fix the router", similarity: 0.91 },
+  { id: "sess-2" },
+]);
+
+const EMBED_JSON = JSON.stringify({ embedded: 7, model: "bge-m3" });
+
+it.effect(
+  "sessionsSemantic passes the embedding provider/model from settings to the child env",
+  () =>
+    Effect.gen(function* () {
+      const apiKey = "sk-EMBEDKEY1234567890";
+      // A recording spawn capturing the env + argv handed to the child for the `sessions semantic` run.
+      let observedEnv: NodeJS.ProcessEnv | undefined;
+      let observedArgs: ReadonlyArray<string> = [];
+      const recordingSpawn: PalliumSpawn = (_command, args, options) => {
+        observedEnv = options.env;
+        observedArgs = args;
+        const child = new FakeChild();
+        queueMicrotask(() => {
+          child.stdout.emit("data", Buffer.from(SEMANTIC_JSON));
+          child.emit("close", 0, null);
+        });
+        return child;
+      };
+      const results = yield* Effect.provide(
+        Effect.gen(function* () {
+          const pallium = yield* PalliumService;
+          return yield* pallium.sessionsSemantic({ query: "router", limit: 5 });
+        }),
+        makePalliumServiceLive({ spawn: recordingSpawn, platform: "linux" }).pipe(
+          Layer.provide(
+            ServerSettingsService.layerTest({
+              memory: {
+                embedding: {
+                  provider: "ollama",
+                  baseUrl: "http://localhost:11434",
+                  model: "bge-m3",
+                },
+              },
+            }),
+          ),
+          Layer.provide(makeFakeSecretStoreLayer({ "memory-embedding-api-key": apiKey })),
+        ),
+      );
+      // The embedding config from settings + the secret-store key reach the child via PALLIUM_EMBED_*.
+      assert.isObject(observedEnv);
+      assert.strictEqual(observedEnv?.PALLIUM_EMBED_PROVIDER, "ollama");
+      assert.strictEqual(observedEnv?.PALLIUM_EMBED_BASE_URL, "http://localhost:11434");
+      assert.strictEqual(observedEnv?.PALLIUM_EMBED_MODEL, "bge-m3");
+      assert.strictEqual(observedEnv?.PALLIUM_EMBED_API_KEY, apiKey);
+      // The model is also a `--model` flag; the api key is NEVER in argv (only the child env).
+      assert.include([...observedArgs], "--model");
+      assert.include([...observedArgs], "bge-m3");
+      assert.notInclude(observedArgs.join(" "), apiKey);
+      // The parent's env survives the merge (env is merged OVER process.env, not a replacement).
+      assert.strictEqual(observedEnv?.PATH, process.env.PATH);
+      assert.strictEqual(results?.length, 2);
+      assert.strictEqual(results?.[0]?.id, "sess-1");
+    }),
+);
+
+it.effect("sessionsEmbed decodes the embed result and passes the model flag", () =>
+  Effect.gen(function* () {
+    let observedArgs: ReadonlyArray<string> = [];
+    const recordingSpawn: PalliumSpawn = (_command, args) => {
+      observedArgs = args;
+      const child = new FakeChild();
+      queueMicrotask(() => {
+        child.stdout.emit("data", Buffer.from(EMBED_JSON));
+        child.emit("close", 0, null);
+      });
+      return child;
+    };
+    const result = yield* Effect.provide(
+      Effect.gen(function* () {
+        const pallium = yield* PalliumService;
+        return yield* pallium.sessionsEmbed();
+      }),
+      makePalliumServiceLive({ spawn: recordingSpawn, platform: "linux" }).pipe(
+        Layer.provide(
+          ServerSettingsService.layerTest({ memory: { embedding: { model: "bge-m3" } } }),
+        ),
+        Layer.provide(makeFakeSecretStoreLayer()),
+      ),
+    );
+    assert.strictEqual(result.embedded, 7);
+    assert.strictEqual(result.model, "bge-m3");
+    assert.include([...observedArgs], "embed");
+    assert.include([...observedArgs], "--model");
   }),
 );

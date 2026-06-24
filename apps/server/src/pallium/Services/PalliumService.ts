@@ -2,8 +2,11 @@ import type {
   PalliumChangedNowResult,
   PalliumDecisionList,
   PalliumDoctorResult,
+  PalliumEmbedResult,
+  PalliumIndexResult,
   PalliumSessionList,
   PalliumSessionSearchList,
+  PalliumSessionSemanticList,
   PalliumStatus,
   PalliumVersionResult,
 } from "@t3tools/contracts";
@@ -33,6 +36,13 @@ export interface PalliumServiceShape {
   readonly doctor: (input?: {
     readonly cwd?: string;
   }) => Effect.Effect<PalliumDoctorResult, PalliumServiceError | PalliumUnavailableError>;
+  /**
+   * `pallium index <repo> --json`: rebuild the repo's index (MUTATING). Returns the index.Result
+   * counts, whose `indexed_at` becomes the fresh cache epoch.
+   */
+  readonly index: (input: {
+    readonly cwd: string;
+  }) => Effect.Effect<PalliumIndexResult, PalliumServiceError | PalliumUnavailableError>;
   /** `pallium changed-now <repo> --json`: the working tree's changed files with risk + tests. */
   readonly changedNow: (input: {
     readonly cwd: string;
@@ -61,6 +71,25 @@ export interface PalliumServiceShape {
     readonly query: string;
     readonly limit?: number;
   }) => Effect.Effect<PalliumSessionSearchList, PalliumServiceError | PalliumUnavailableError>;
+  /**
+   * `pallium sessions semantic <query> [--model …] [--limit N] --json`: a top-level array of vector
+   * (semantic) search hits over the home-level session DB. Requires embeddings; the embedding
+   * provider/baseUrl/model (from settings.memory.embedding) and the api key (from the secret store)
+   * are passed to the child as PALLIUM_EMBED_* env vars. Vectors are partitioned by (provider, model).
+   */
+  readonly sessionsSemantic: (input: {
+    readonly query: string;
+    readonly limit?: number;
+  }) => Effect.Effect<PalliumSessionSemanticList, PalliumServiceError | PalliumUnavailableError>;
+  /**
+   * `pallium sessions embed [--model …] --json`: embed any un-embedded session backlog into the
+   * configured (provider, model) space (MUTATING). The embedding provider/baseUrl/model + api key are
+   * passed to the child as PALLIUM_EMBED_* env vars, exactly like `sessionsSemantic`.
+   */
+  readonly sessionsEmbed: () => Effect.Effect<
+    PalliumEmbedResult,
+    PalliumServiceError | PalliumUnavailableError
+  >;
 }
 
 export class PalliumService extends ServiceMap.Service<PalliumService, PalliumServiceShape>()(

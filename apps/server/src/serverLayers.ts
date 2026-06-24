@@ -113,7 +113,13 @@ export function makeServerRuntimeServicesLayer() {
   const automationRunReactorLayer = AutomationRunReactorLive.pipe(
     Layer.provideMerge(automationServiceLayer),
   );
-  const palliumServiceLayer = PalliumServiceLive.pipe(Layer.provideMerge(ServerSettingsLive));
+  const palliumServiceLayer = PalliumServiceLive.pipe(
+    Layer.provideMerge(ServerSettingsLive),
+    // The semantic-search / embed runners read the embedding api key from the secret store to pass
+    // it to the Pallium child env. ServerSecretStoreLive's own deps (FileSystem/Path/ServerConfig)
+    // bubble up to be satisfied at the top, exactly like authServicesLayer.
+    Layer.provideMerge(ServerSecretStoreLive),
+  );
   const memoryServiceLayer = MemoryServiceLive.pipe(
     Layer.provideMerge(palliumServiceLayer),
     Layer.provideMerge(PalliumCommandCacheRepositoryLive),

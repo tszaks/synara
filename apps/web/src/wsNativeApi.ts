@@ -725,6 +725,9 @@ export function createWsNativeApi(): NativeApi {
       listSessions: (input) => transport.request(WS_METHODS.memoryListSessions, input ?? {}),
       listDecisions: (input) => transport.request(WS_METHODS.memoryListDecisions, input),
       search: (input) => transport.request(WS_METHODS.memorySearch, input),
+      searchSemantic: (input) => transport.request(WS_METHODS.memorySearchSemantic, input),
+      index: (input) => transport.request(WS_METHODS.memoryIndex, input),
+      embedSessions: (input) => transport.request(WS_METHODS.memoryEmbedSessions, input),
     },
     browser: {
       open: async (input) => {

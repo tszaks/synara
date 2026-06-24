@@ -22,6 +22,10 @@ import { OpenInEditorInput } from "./editor";
 import {
   MemoryDecisionList,
   MemoryFileList,
+  MemoryEmbedInput,
+  MemoryEmbedResult,
+  MemoryIndexInput,
+  MemoryIndexResult,
   MemoryListDecisionsInput,
   MemoryListFilesInput,
   MemoryListSessionsInput,
@@ -29,6 +33,7 @@ import {
   MemoryOverviewInput,
   MemorySearchInput,
   MemorySearchResultList,
+  MemorySearchSemanticInput,
   MemorySessionList,
   MemoryStatus,
   MemoryStatusInput,
@@ -604,6 +609,26 @@ export const WsMemorySearchRpc = Rpc.make(WS_METHODS.memorySearch, {
   error: WsRpcError,
 });
 
+// Semantic (vector) search reuses MemorySearchResultList so the UI renders lexical + semantic hits
+// the same way.
+export const WsMemorySearchSemanticRpc = Rpc.make(WS_METHODS.memorySearchSemantic, {
+  payload: MemorySearchSemanticInput,
+  success: MemorySearchResultList,
+  error: WsRpcError,
+});
+
+export const WsMemoryIndexRpc = Rpc.make(WS_METHODS.memoryIndex, {
+  payload: MemoryIndexInput,
+  success: MemoryIndexResult,
+  error: WsRpcError,
+});
+
+export const WsMemoryEmbedSessionsRpc = Rpc.make(WS_METHODS.memoryEmbedSessions, {
+  payload: MemoryEmbedInput,
+  success: MemoryEmbedResult,
+  error: WsRpcError,
+});
+
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
   payload: Schema.Struct({}),
   success: ServerRefreshProvidersResult,
@@ -940,4 +965,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsMemoryListSessionsRpc,
   WsMemoryListDecisionsRpc,
   WsMemorySearchRpc,
+  WsMemorySearchSemanticRpc,
+  WsMemoryIndexRpc,
+  WsMemoryEmbedSessionsRpc,
 );
