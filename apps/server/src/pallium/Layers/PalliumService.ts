@@ -1,4 +1,11 @@
-import { PalliumDoctorResult, type PalliumStatus, PalliumVersionResult } from "@t3tools/contracts";
+import {
+  PalliumChangedNowResult,
+  PalliumDecisionList,
+  PalliumDoctorResult,
+  PalliumSessionList,
+  type PalliumStatus,
+  PalliumVersionResult,
+} from "@t3tools/contracts";
 import { Effect, Layer, Ref } from "effect";
 
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -70,6 +77,55 @@ export const makePalliumServiceLive = (options?: PalliumServiceLiveOptions) =>
               timeoutMs: HANDSHAKE_TIMEOUT_MS,
               ...(input?.cwd !== undefined ? { args: [input.cwd] } : {}),
               ...(input?.cwd !== undefined ? { cwd: input.cwd } : {}),
+              ...(options?.spawn ? { spawn: options.spawn } : {}),
+              ...(options?.platform ? { platform: options.platform } : {}),
+            }),
+          ),
+        );
+
+      // Read commands that hit the repo/session DB. They can take longer than the handshake probes,
+      // so they use runPalliumJson's default timeout rather than the short HANDSHAKE_TIMEOUT_MS.
+      const changedNow = (input: { readonly cwd: string }) =>
+        readBinaryPath.pipe(
+          Effect.flatMap((binaryPath) =>
+            runPalliumJson({
+              subcommand: "changed-now",
+              schema: PalliumChangedNowResult,
+              binaryPath,
+              args: [input.cwd],
+              cwd: input.cwd,
+              ...(options?.spawn ? { spawn: options.spawn } : {}),
+              ...(options?.platform ? { platform: options.platform } : {}),
+            }),
+          ),
+        );
+
+      const sessionsList = (input?: { readonly limit?: number }) =>
+        readBinaryPath.pipe(
+          Effect.flatMap((binaryPath) =>
+            runPalliumJson({
+              subcommand: "sessions",
+              schema: PalliumSessionList,
+              binaryPath,
+              args:
+                input?.limit !== undefined ? ["list", "--limit", String(input.limit)] : ["list"],
+              ...(options?.spawn ? { spawn: options.spawn } : {}),
+              ...(options?.platform ? { platform: options.platform } : {}),
+            }),
+          ),
+        );
+
+      // `decisions` takes the query as the FIRST positional arg, then an optional repo path; both are
+      // passed as discrete argv (never interpolated) so a query is never treated as a shell string.
+      const decisions = (input: { readonly query: string; readonly cwd?: string }) =>
+        readBinaryPath.pipe(
+          Effect.flatMap((binaryPath) =>
+            runPalliumJson({
+              subcommand: "decisions",
+              schema: PalliumDecisionList,
+              binaryPath,
+              args: input.cwd !== undefined ? [input.query, input.cwd] : [input.query],
+              ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
               ...(options?.spawn ? { spawn: options.spawn } : {}),
               ...(options?.platform ? { platform: options.platform } : {}),
             }),
@@ -155,6 +211,9 @@ export const makePalliumServiceLive = (options?: PalliumServiceLiveOptions) =>
         status,
         version,
         doctor,
+        changedNow,
+        sessionsList,
+        decisions,
       } satisfies PalliumServiceShape;
     }),
   );

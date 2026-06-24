@@ -1,9 +1,20 @@
 import {
+  MemoryDecisionList,
+  type MemoryFile,
+  MemoryFileList,
+  type MemoryListDecisionsInput,
+  type MemoryListFilesInput,
+  type MemoryListSessionsInput,
   MemoryOverview,
   type MemoryOverviewInput,
+  type MemorySession,
+  MemorySessionList,
   type MemoryStatus,
+  type PalliumChangedNowResult,
+  type PalliumDecisionList,
   type PalliumDoctorResult,
-  type ProjectId,
+  type PalliumSessionList,
+  ProjectId,
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, Ref, Schema } from "effect";
 
@@ -21,6 +32,20 @@ const OVERVIEW_CACHE_TTL_MS = 5 * 60_000;
 // The cache `command` discriminator for overview rows. Keeps overview rows distinct from any other
 // cached command for the same project.
 const OVERVIEW_CACHE_COMMAND = "memory.overview";
+
+// Sessions and decisions are home-DB scoped, not repo-epoch scoped. They are cached by
+// command+args with the TTL `expires_at` as the sole invalidation backstop, under a constant epoch.
+const SESSIONS_CACHE_COMMAND = "memory.listSessions";
+const DECISIONS_CACHE_COMMAND = "memory.listDecisions";
+const SESSIONS_CACHE_TTL_MS = 60_000;
+const DECISIONS_CACHE_TTL_MS = 60_000;
+// A fixed epoch for non-repo-epoch-scoped cache rows (sessions). The cache key still requires an
+// epoch, but for home-DB data there is no index epoch, so the TTL alone bounds staleness.
+const HOME_DB_EPOCH = "home-db";
+// A sentinel project id for cache rows that are not tied to a real project (the sessions list is
+// global). The cache key requires a ProjectId; this keeps global rows out of any real project's
+// namespace.
+const GLOBAL_PROJECT_ID = ProjectId.makeUnsafe("memory:global");
 
 // A zeroed, valid overview. Returned whenever Pallium is unavailable or no project is indexed, so
 // read callers never throw.
@@ -73,6 +98,61 @@ const doctorToOverview = (doctor: PalliumDoctorResult): MemoryOverview => ({
 // memoizes within the TTL window.
 const epochFromDoctor = (doctor: PalliumDoctorResult): string =>
   doctor.last_indexed_commit ?? doctor.indexed_at ?? `status:${doctor.index_status}`;
+
+// Map a Pallium changed-now report into the stable MemoryFileList shape. Lenient: a null/omitted
+// files array (or null suggested_tests/blast_radius) folds into an empty array.
+const changedNowToFileList = (report: PalliumChangedNowResult): MemoryFileList => ({
+  available: true,
+  files: (report.files ?? []).map(
+    (file): MemoryFile => ({
+      path: file.path,
+      workingTreeStatus: file.working_tree_status,
+      riskLevel: file.risk_level,
+      suggestedTests: [...(file.suggested_tests ?? [])],
+      blastRadius: [...(file.blast_radius ?? [])],
+    }),
+  ),
+});
+
+// Map a Pallium sessions list (top-level array) into the stable MemorySessionList shape.
+const sessionsToSessionList = (sessions: PalliumSessionList): MemorySessionList => ({
+  available: true,
+  sessions: (sessions ?? []).map(
+    (session): MemorySession => ({
+      id: session.id,
+      ...(session.title !== undefined ? { title: session.title } : {}),
+      ...(session.cwd !== undefined ? { cwd: session.cwd } : {}),
+      ...(session.source !== undefined ? { source: session.source } : {}),
+      ...(session.model_provider !== undefined ? { modelProvider: session.model_provider } : {}),
+      ...(session.model !== undefined ? { model: session.model } : {}),
+      ...(session.git_branch !== undefined ? { gitBranch: session.git_branch } : {}),
+      ...(session.created_at !== undefined ? { createdAt: session.created_at } : {}),
+      ...(session.updated_at !== undefined ? { updatedAt: session.updated_at } : {}),
+      ...(session.status !== undefined ? { status: session.status } : {}),
+    }),
+  ),
+});
+
+// Map a Pallium decisions list (top-level array) into the stable MemoryDecisionList shape.
+const decisionsToDecisionList = (decisions: PalliumDecisionList): MemoryDecisionList => ({
+  available: true,
+  decisions: (decisions ?? []).map((decision) => ({
+    ...(decision.source_type !== undefined ? { sourceType: decision.source_type } : {}),
+    ...(decision.source_ref !== undefined ? { sourceRef: decision.source_ref } : {}),
+    ...(decision.title !== undefined ? { title: decision.title } : {}),
+    ...(decision.body !== undefined ? { body: decision.body } : {}),
+    ...(decision.committed_at !== undefined ? { committedAt: decision.committed_at } : {}),
+  })),
+});
+
+// Empty, valid results returned whenever Pallium is unavailable or a project can't be resolved, so
+// read callers never throw.
+const emptyFileList = (available: boolean): MemoryFileList => ({ available, files: [] });
+const emptySessionList = (available: boolean): MemorySessionList => ({ available, sessions: [] });
+const emptyDecisionList = (available: boolean): MemoryDecisionList => ({
+  available,
+  decisions: [],
+});
 
 export const MemoryServiceLive = Layer.effect(
   MemoryService,
@@ -226,9 +306,215 @@ export const MemoryServiceLive = Layer.effect(
         return yield* overviewForRepo(projectId, repoPathOption.value);
       });
 
+    // A generic, schema-checked cache read for a command+args row under a fixed epoch. Returns the
+    // decoded contract value on a hit, or None on a miss / decode failure path. Used by the
+    // home-DB-scoped read methods (sessions, decisions) whose only invalidation is the TTL.
+    const readCachedResult = <A, I>(input: {
+      readonly schema: Schema.Codec<A, I>;
+      readonly command: string;
+      readonly args: string;
+      readonly projectId: ProjectId;
+      readonly indexEpoch: string;
+      readonly now: Date;
+    }) =>
+      cache
+        .get({
+          command: input.command,
+          args: input.args,
+          projectId: input.projectId,
+          indexEpoch: input.indexEpoch,
+          now: input.now.toISOString(),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) => new MemoryServiceError({ message: "Failed to read memory cache.", cause }),
+          ),
+          Effect.flatMap((cached) =>
+            Option.isNone(cached)
+              ? Effect.succeed(Option.none<A>())
+              : Schema.decodeUnknownEffect(input.schema)(cached.value.resultJson).pipe(
+                  Effect.map(Option.some),
+                  Effect.mapError(
+                    (cause) =>
+                      new MemoryServiceError({
+                        message: "Failed to decode cached memory result.",
+                        cause,
+                      }),
+                  ),
+                ),
+          ),
+        );
+
+    // A generic, schema-checked cache write under a fixed epoch with a TTL backstop.
+    const writeCachedResult = <A, I>(input: {
+      readonly schema: Schema.Codec<A, I>;
+      readonly command: string;
+      readonly args: string;
+      readonly projectId: ProjectId;
+      readonly indexEpoch: string;
+      readonly value: A;
+      readonly now: Date;
+      readonly ttlMs: number;
+    }) =>
+      Schema.encodeUnknownEffect(input.schema)(input.value).pipe(
+        Effect.mapError(
+          (cause) => new MemoryServiceError({ message: "Failed to encode memory result.", cause }),
+        ),
+        Effect.flatMap((encoded) =>
+          cache
+            .put({
+              command: input.command,
+              args: input.args,
+              projectId: input.projectId,
+              indexEpoch: input.indexEpoch,
+              argsJson: {},
+              resultJson: encoded as never,
+              createdAt: input.now.toISOString(),
+              expiresAt: new Date(input.now.getTime() + input.ttlMs).toISOString(),
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new MemoryServiceError({ message: "Failed to write memory cache.", cause }),
+              ),
+            ),
+        ),
+      );
+
+    // listFiles maps `pallium changed-now`. It reflects the LIVE working tree (not the index), so it
+    // is intentionally NOT cached: an index-epoch key would miss real working-tree edits and a TTL
+    // would risk showing stale changes. Correctness over a re-spawn here.
+    const listFiles = (input?: MemoryListFilesInput) =>
+      Effect.gen(function* () {
+        const palliumStatus = yield* pallium.status;
+        if (!palliumStatus.available) {
+          return emptyFileList(false);
+        }
+        const projectId = input?.projectId;
+        if (projectId === undefined) {
+          // No repo to inspect: there are no changed files to report.
+          return emptyFileList(true);
+        }
+        const repoPathOption = yield* resolveRepoPath(projectId);
+        if (Option.isNone(repoPathOption)) {
+          return emptyFileList(true);
+        }
+        const report = yield* pallium
+          .changedNow({ cwd: repoPathOption.value })
+          .pipe(
+            Effect.mapError(
+              (cause) => new MemoryServiceError({ message: "Failed to list memory files.", cause }),
+            ),
+          );
+        return changedNowToFileList(report);
+      });
+
+    // listSessions maps `pallium sessions list`. Sessions are home-DB scoped (not repo-epoch
+    // scoped), so we cache by command+args under a constant epoch with the TTL as the only backstop.
+    const listSessions = (input?: MemoryListSessionsInput) =>
+      Effect.gen(function* () {
+        const palliumStatus = yield* pallium.status;
+        if (!palliumStatus.available) {
+          return emptySessionList(false);
+        }
+        const now = new Date();
+        const limit = input?.limit;
+        const argsKey = limit !== undefined ? `limit=${limit}` : "";
+        const cached = yield* readCachedResult({
+          schema: MemorySessionList,
+          command: SESSIONS_CACHE_COMMAND,
+          args: argsKey,
+          projectId: GLOBAL_PROJECT_ID,
+          indexEpoch: HOME_DB_EPOCH,
+          now,
+        });
+        if (Option.isSome(cached)) {
+          return cached.value;
+        }
+        const sessions = yield* pallium
+          .sessionsList(limit !== undefined ? { limit } : undefined)
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new MemoryServiceError({ message: "Failed to list memory sessions.", cause }),
+            ),
+          );
+        const result = sessionsToSessionList(sessions);
+        yield* writeCachedResult({
+          schema: MemorySessionList,
+          command: SESSIONS_CACHE_COMMAND,
+          args: argsKey,
+          projectId: GLOBAL_PROJECT_ID,
+          indexEpoch: HOME_DB_EPOCH,
+          value: result,
+          now,
+          ttlMs: SESSIONS_CACHE_TTL_MS,
+        });
+        return result;
+      });
+
+    // listDecisions maps `pallium decisions <query> <repo>`. GAP A: the query is required and Pallium
+    // caps results at ~10; there is no "list all" mode. Cached by command+args (query + project)
+    // under a constant epoch with the TTL as the only backstop.
+    const listDecisions = (input: MemoryListDecisionsInput) =>
+      Effect.gen(function* () {
+        const palliumStatus = yield* pallium.status;
+        if (!palliumStatus.available) {
+          return emptyDecisionList(false);
+        }
+        const projectId = input.projectId;
+        const repoPath = yield* projectId === undefined
+          ? Effect.succeed(Option.none<string>())
+          : resolveRepoPath(projectId);
+        // A project was named but could not be resolved to a repo: nothing to search.
+        if (projectId !== undefined && Option.isNone(repoPath)) {
+          return emptyDecisionList(true);
+        }
+        const now = new Date();
+        const cacheProjectId = projectId ?? GLOBAL_PROJECT_ID;
+        const argsKey = `query=${input.query}`;
+        const cached = yield* readCachedResult({
+          schema: MemoryDecisionList,
+          command: DECISIONS_CACHE_COMMAND,
+          args: argsKey,
+          projectId: cacheProjectId,
+          indexEpoch: HOME_DB_EPOCH,
+          now,
+        });
+        if (Option.isSome(cached)) {
+          return cached.value;
+        }
+        const decisions = yield* pallium
+          .decisions({
+            query: input.query,
+            ...(Option.isSome(repoPath) ? { cwd: repoPath.value } : {}),
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new MemoryServiceError({ message: "Failed to list memory decisions.", cause }),
+            ),
+          );
+        const result = decisionsToDecisionList(decisions);
+        yield* writeCachedResult({
+          schema: MemoryDecisionList,
+          command: DECISIONS_CACHE_COMMAND,
+          args: argsKey,
+          projectId: cacheProjectId,
+          indexEpoch: HOME_DB_EPOCH,
+          value: result,
+          now,
+          ttlMs: DECISIONS_CACHE_TTL_MS,
+        });
+        return result;
+      });
+
     return {
       status,
       overview,
+      listFiles,
+      listSessions,
+      listDecisions,
     } satisfies MemoryServiceShape;
   }),
 );

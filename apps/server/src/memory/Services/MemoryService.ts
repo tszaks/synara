@@ -1,4 +1,14 @@
-import type { MemoryOverview, MemoryOverviewInput, MemoryStatus } from "@t3tools/contracts";
+import type {
+  MemoryDecisionList,
+  MemoryFileList,
+  MemoryListDecisionsInput,
+  MemoryListFilesInput,
+  MemoryListSessionsInput,
+  MemoryOverview,
+  MemoryOverviewInput,
+  MemorySessionList,
+  MemoryStatus,
+} from "@t3tools/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -24,6 +34,30 @@ export interface MemoryServiceShape {
   readonly overview: (
     input?: MemoryOverviewInput,
   ) => Effect.Effect<MemoryOverview, MemoryServiceError>;
+  /**
+   * The project's changed files (from `pallium changed-now`), with risk + suggested tests. Returns
+   * an empty, valid list when Pallium is unavailable or the project is unknown. Memoized by index
+   * epoch.
+   */
+  readonly listFiles: (
+    input?: MemoryListFilesInput,
+  ) => Effect.Effect<MemoryFileList, MemoryServiceError>;
+  /**
+   * Recent coding sessions (from `pallium sessions list`). Sessions live in the home-level DB, so
+   * this is not repo-scoped; it is cached by command+args with a TTL backstop. Returns an empty,
+   * valid list when Pallium is unavailable.
+   */
+  readonly listSessions: (
+    input?: MemoryListSessionsInput,
+  ) => Effect.Effect<MemorySessionList, MemoryServiceError>;
+  /**
+   * Decision notes matching a query (from `pallium decisions`). The query is REQUIRED and Pallium
+   * caps results at ~10 (GAP A). Returns an empty, valid list when Pallium is unavailable or the
+   * project is unknown.
+   */
+  readonly listDecisions: (
+    input: MemoryListDecisionsInput,
+  ) => Effect.Effect<MemoryDecisionList, MemoryServiceError>;
 }
 
 export class MemoryService extends ServiceMap.Service<MemoryService, MemoryServiceShape>()(

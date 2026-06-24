@@ -930,6 +930,12 @@ export const makeWsRpcLayer = () =>
           rpcEffect(memoryService.status, "Failed to load memory status"),
         [WS_METHODS.memoryOverview]: (input) =>
           rpcEffect(memoryService.overview(input), "Failed to load memory overview"),
+        [WS_METHODS.memoryListFiles]: (input) =>
+          rpcEffect(memoryService.listFiles(input), "Failed to list memory files"),
+        [WS_METHODS.memoryListSessions]: (input) =>
+          rpcEffect(memoryService.listSessions(input), "Failed to list memory sessions"),
+        [WS_METHODS.memoryListDecisions]: (input) =>
+          rpcEffect(memoryService.listDecisions(input), "Failed to list memory decisions"),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
             providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),
