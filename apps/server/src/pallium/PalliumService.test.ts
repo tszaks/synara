@@ -202,3 +202,47 @@ it.effect("strips a fake sk- token from stderr on a non-zero exit", () =>
     assert.include(message, "[redacted]");
   }),
 );
+
+it.effect("never spawns through a shell, even on win32", () =>
+  Effect.gen(function* () {
+    let observedShell: unknown = "unset";
+    const recordingSpawn: PalliumSpawn = (_command, _args, options) => {
+      observedShell = options.shell;
+      const child = new FakeChild();
+      queueMicrotask(() => {
+        child.stdout.emit("data", Buffer.from(VERSION_JSON));
+        child.emit("close", 0, null);
+      });
+      return child;
+    };
+    yield* runPalliumJson({
+      subcommand: "version",
+      schema: Schema.Unknown,
+      spawn: recordingSpawn,
+      platform: "win32",
+    });
+    // `shell: true` on Windows would route argv through cmd.exe and re-open command-string
+    // injection. The boundary must always spawn with shell disabled.
+    assert.strictEqual(observedShell, false);
+  }),
+);
+
+it.effect("redacts a secret echoed in non-JSON stdout from message AND cause", () =>
+  Effect.gen(function* () {
+    const secret = "sk-ABCDEF1234567890SECRET";
+    const exit = yield* Effect.exit(
+      runPalliumJson({
+        subcommand: "version",
+        schema: Schema.Unknown,
+        // Invalid JSON that embeds a secret; the SyntaxError can echo this snippet.
+        spawn: makeFakeSpawn({ stdout: `not json ${secret}`, code: 0 }),
+        platform: "linux",
+      }),
+    );
+    const error = expectFailure(exit);
+    assert.instanceOf(error, PalliumServiceError);
+    const palliumError = error as PalliumServiceError;
+    assert.notInclude(palliumError.message, secret);
+    assert.notInclude(JSON.stringify(palliumError.cause ?? ""), secret);
+  }),
+);

@@ -11,6 +11,7 @@
  */
 import { spawn as nodeSpawn } from "node:child_process";
 
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { Effect, Schema } from "effect";
 
 import { PalliumServiceError, PalliumUnavailableError } from "./Errors.ts";
@@ -47,6 +48,9 @@ export const DEFAULT_PALLIUM_BINARY = "pallium";
 const DEFAULT_TIMEOUT_MS = 30_000;
 // Bound the buffered stdout/stderr so a runaway binary can't exhaust memory.
 const DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+// If SIGTERM doesn't drop the child quickly (on timeout/abort/overflow), escalate to SIGKILL so we
+// never leave an orphaned/zombie pallium process holding the repo DB.
+const KILL_ESCALATION_MS = 2_000;
 
 /**
  * Minimal structural type of `node:child_process` spawn we depend on. Declaring only the surface
@@ -74,7 +78,11 @@ export type PalliumSpawn = (
   options: {
     readonly cwd?: string;
     readonly stdio: ["ignore", "pipe", "pipe"];
-    readonly shell: boolean;
+    // Always false: we never hand a command string to a shell on any platform. Windows `.cmd`/`.bat`
+    // shims are resolved + escaped explicitly via `prepareWindowsSafeProcess` instead, matching the
+    // codex spawn path. `shell: true` would re-open a command-string injection surface on Windows.
+    readonly shell: false;
+    readonly windowsHide?: true;
   },
 ) => PalliumSpawnedProcess;
 
@@ -129,12 +137,19 @@ function spawnPallium(input: {
 
       let child: PalliumSpawnedProcess;
       try {
-        child = input.spawn(input.binaryPath, input.argv, {
+        // Resolve the binary (and wrap any Windows `.cmd`/`.bat` shim) without ever using
+        // `shell: true`. On Windows this routes batch shims through `cmd.exe /c` with every token
+        // caret-escaped + quoted; on POSIX it is a pass-through. This is the same injection-safe
+        // path codexAppServerManager uses. argv is always passed discretely, never interpolated.
+        const prepared = prepareWindowsSafeProcess(input.binaryPath, input.argv, {
+          platform: input.platform,
+          ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+        });
+        child = input.spawn(prepared.command, prepared.args, {
           ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
           stdio: ["ignore", "pipe", "pipe"],
-          // Only Windows needs a shell to resolve `.cmd`/`.bat` shims; elsewhere a shell would
-          // re-open a command-string injection surface we deliberately avoid.
-          shell: input.platform === "win32",
+          shell: false,
+          ...(prepared.windowsHide ? { windowsHide: prepared.windowsHide } : {}),
         });
       } catch (cause) {
         resume(
@@ -142,6 +157,19 @@ function spawnPallium(input: {
         );
         return;
       }
+
+      // Ask the child to exit, then force-kill if it ignores SIGTERM, so an unresponsive pallium
+      // process is never left orphaned holding the repo DB. The escalation timer is unref'd so it
+      // can't keep the event loop alive on its own.
+      const terminateChild = () => {
+        child.kill("SIGTERM");
+        const killTimer = setTimeout(() => {
+          child.kill("SIGKILL");
+        }, KILL_ESCALATION_MS);
+        if (typeof killTimer.unref === "function") {
+          killTimer.unref();
+        }
+      };
 
       const settle = (
         effect: Effect.Effect<PalliumRawResult, PalliumServiceError | PalliumUnavailableError>,
@@ -158,12 +186,12 @@ function spawnPallium(input: {
       };
 
       const onAbort = () => {
-        child.kill("SIGTERM");
+        terminateChild();
         settle(Effect.fail(new PalliumServiceError({ message: "pallium command aborted" })));
       };
 
       const timer = setTimeout(() => {
-        child.kill("SIGTERM");
+        terminateChild();
         settle(
           Effect.fail(
             new PalliumServiceError({
@@ -190,7 +218,7 @@ function spawnPallium(input: {
       child.stdout?.on("data", (chunk: Buffer | string) => {
         stdoutBytes += Buffer.byteLength(chunk);
         if (stdoutBytes > DEFAULT_MAX_BUFFER_BYTES) {
-          child.kill("SIGTERM");
+          terminateChild();
           settle(
             Effect.fail(new PalliumServiceError({ message: "pallium stdout exceeded max buffer" })),
           );
@@ -199,7 +227,7 @@ function spawnPallium(input: {
       child.stderr?.on("data", (chunk: Buffer | string) => {
         stderrBytes += Buffer.byteLength(chunk);
         if (stderrBytes > DEFAULT_MAX_BUFFER_BYTES) {
-          child.kill("SIGTERM");
+          terminateChild();
           settle(
             Effect.fail(new PalliumServiceError({ message: "pallium stderr exceeded max buffer" })),
           );
@@ -286,19 +314,23 @@ export function runPalliumJson<A, I>(
       }
       return Effect.try({
         try: () => JSON.parse(result.stdout) as unknown,
+        // The raw SyntaxError message can echo a slice of stdout (possibly a secret), so carry a
+        // redacted string as the cause rather than the raw error object.
         catch: (cause) =>
           new PalliumServiceError({
             message: `pallium ${input.subcommand} returned invalid JSON: ${redactedErrorMessage(cause)}`,
-            cause,
+            cause: redactedErrorMessage(cause),
           }),
       }).pipe(
         Effect.flatMap((parsed) =>
           Schema.decodeUnknownEffect(input.schema)(parsed).pipe(
+            // A ParseError stringifies the offending input value, which could contain a secret the
+            // binary echoed. Never carry the raw ParseError; redact it to a safe string.
             Effect.mapError(
               (cause) =>
                 new PalliumServiceError({
                   message: `pallium ${input.subcommand} JSON did not match the expected schema`,
-                  cause,
+                  cause: redactedErrorMessage(cause),
                 }),
             ),
           ),
