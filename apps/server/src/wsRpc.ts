@@ -37,6 +37,7 @@ import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
 import { TextGeneration } from "./git/Services/TextGeneration";
 import { Keybindings } from "./keybindings";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
+import { MemoryService } from "./memory/Services/MemoryService";
 import { Open, resolveAvailableEditors } from "./open";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
@@ -339,6 +340,7 @@ export const makeWsRpcLayer = () =>
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
       const keybindings = yield* Keybindings;
+      const memoryService = yield* MemoryService;
       const open = yield* Open;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const path = yield* Path.Path;
@@ -924,6 +926,10 @@ export const makeWsRpcLayer = () =>
             }),
             "Failed to store memory embedding API key",
           ),
+        [WS_METHODS.memoryStatus]: () =>
+          rpcEffect(memoryService.status, "Failed to load memory status"),
+        [WS_METHODS.memoryOverview]: (input) =>
+          rpcEffect(memoryService.overview(input), "Failed to load memory overview"),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
             providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),

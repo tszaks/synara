@@ -32,6 +32,7 @@ import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
+import { MemoryServiceLive } from "./memory/Layers/MemoryService";
 import { PalliumServiceLive } from "./pallium/Layers/PalliumService";
 import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
 import { PalliumCommandCacheRepositoryLive } from "./persistence/Layers/PalliumCommandCache";
@@ -113,12 +114,19 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(automationServiceLayer),
   );
   const palliumServiceLayer = PalliumServiceLive.pipe(Layer.provideMerge(ServerSettingsLive));
+  const memoryServiceLayer = MemoryServiceLive.pipe(
+    Layer.provideMerge(palliumServiceLayer),
+    Layer.provideMerge(PalliumCommandCacheRepositoryLive),
+    Layer.provideMerge(OrchestrationLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
+  );
 
   return Layer.mergeAll(
     automationServiceLayer,
     automationSchedulerLayer,
     automationRunReactorLayer,
     palliumServiceLayer,
+    memoryServiceLayer,
     PalliumCommandCacheRepositoryLive,
     orchestrationReactorLayer,
     threadDeletionReactorLayer,

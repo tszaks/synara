@@ -19,6 +19,7 @@ import {
   AutomationUpdateInput,
 } from "./automation";
 import { OpenInEditorInput } from "./editor";
+import { MemoryOverview, MemoryOverviewInput, MemoryStatus, MemoryStatusInput } from "./memory";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import {
   GitCheckoutInput,
@@ -554,6 +555,18 @@ export const WsMemorySetEmbeddingApiKeyRpc = Rpc.make(WS_METHODS.memorySetEmbedd
   error: WsRpcError,
 });
 
+export const WsMemoryStatusRpc = Rpc.make(WS_METHODS.memoryStatus, {
+  payload: MemoryStatusInput,
+  success: MemoryStatus,
+  error: WsRpcError,
+});
+
+export const WsMemoryOverviewRpc = Rpc.make(WS_METHODS.memoryOverview, {
+  payload: MemoryOverviewInput,
+  success: MemoryOverview,
+  error: WsRpcError,
+});
+
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
   payload: Schema.Struct({}),
   success: ServerRefreshProvidersResult,
@@ -884,4 +897,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsAutomationArchiveRunRpc,
   WsSubscribeAutomationEventsRpc,
   WsMemorySetEmbeddingApiKeyRpc,
+  WsMemoryStatusRpc,
+  WsMemoryOverviewRpc,
 );
