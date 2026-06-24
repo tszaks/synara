@@ -34,6 +34,7 @@ import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResol
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 import { PalliumServiceLive } from "./pallium/Layers/PalliumService";
 import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
+import { PalliumCommandCacheRepositoryLive } from "./persistence/Layers/PalliumCommandCache";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
@@ -118,6 +119,7 @@ export function makeServerRuntimeServicesLayer() {
     automationSchedulerLayer,
     automationRunReactorLayer,
     palliumServiceLayer,
+    PalliumCommandCacheRepositoryLive,
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,
