@@ -175,35 +175,45 @@ export function automationApprovalGaps(input: {
   readonly acknowledgedRisks: readonly AutomationAcknowledgedRiskId[];
 } {
   const acknowledged = new Set(input.acknowledgedRisks);
-  const required: AutomationAcknowledgedRiskId[] = [];
-  if (input.runtimeMode === "full-access") {
-    required.push("full-access");
+  // Definite run blockers the server enforces up front (riskAcknowledgementError): full
+  // access runtime and an explicit local checkout. These drive the banner and the Run-now
+  // disable. "auto" is not a definite blocker, so a normal auto run is never blocked here.
+  const blocking = new Set<AutomationAcknowledgedRiskId>();
+  if (input.runtimeMode === "full-access" && !acknowledged.has("full-access")) {
+    blocking.add("full-access");
   }
-  if (input.worktreeMode === "local") {
-    required.push("local-checkout");
+  if (input.worktreeMode === "local" && !acknowledged.has("local-checkout")) {
+    blocking.add("local-checkout");
+  }
+  if (blocking.size === 0) {
+    // Nothing blocks the run, so no approval is surfaced and nothing new is persisted.
+    return { warnings: [], acknowledgedRisks: input.acknowledgedRisks };
+  }
+  const warnings = buildAutomationDraftWarnings({
+    schedule: input.schedule,
+    mode: input.mode,
+    runtimeMode: input.runtimeMode,
+    worktreeMode: input.worktreeMode,
+    hasEphemeralContext: false,
+    generatedConfidence: null,
+    generatedNeedsConfirmation: false,
+    prompt: input.prompt,
+  }).filter((warning) => blocking.has(warning.id as AutomationAcknowledgedRiskId));
+  // Persist every risk the config requires so the automation is fully runnable: local
+  // checkout is included for "auto" too, so a runtime worktree-creation fallback is covered
+  // once approved, plus fast-interval for a sub-minute schedule (automation.update would
+  // otherwise reject it).
+  const required = new Set<AutomationAcknowledgedRiskId>(input.acknowledgedRisks);
+  if (input.runtimeMode === "full-access") {
+    required.add("full-access");
+  }
+  if (input.worktreeMode === "local" || input.worktreeMode === "auto") {
+    required.add("local-checkout");
   }
   if (input.schedule.type === "interval" && input.schedule.everySeconds < 60) {
-    required.push("fast-interval");
+    required.add("fast-interval");
   }
-  // Run-blocking risks (everything required except fast-interval) still needing consent.
-  const blocking = new Set(
-    required.filter((risk) => risk !== "fast-interval" && !acknowledged.has(risk)),
-  );
-  const warnings =
-    blocking.size === 0
-      ? []
-      : buildAutomationDraftWarnings({
-          schedule: input.schedule,
-          mode: input.mode,
-          runtimeMode: input.runtimeMode,
-          worktreeMode: input.worktreeMode,
-          hasEphemeralContext: false,
-          generatedConfidence: null,
-          generatedNeedsConfirmation: false,
-          prompt: input.prompt,
-        }).filter((warning) => blocking.has(warning.id as AutomationAcknowledgedRiskId));
-  const acknowledgedRisks = Array.from(new Set([...input.acknowledgedRisks, ...required]));
-  return { warnings, acknowledgedRisks };
+  return { warnings, acknowledgedRisks: Array.from(required) };
 }
 
 export function acknowledgedRiskIdsForDraft(

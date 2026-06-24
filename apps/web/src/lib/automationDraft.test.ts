@@ -252,9 +252,10 @@ describe("automationApprovalGaps", () => {
     expect(gaps.acknowledgedRisks).toEqual([]);
   });
 
-  it("does not block an auto worktree on local-checkout", () => {
-    // worktreeMode "auto" only needs local-checkout if the server fails to create a worktree
-    // at runtime, so a normal auto run must not be flagged or have local-checkout persisted.
+  it("does not block an auto worktree but covers its fallback on approve", () => {
+    // worktreeMode "auto" is not a definite blocker, so the banner stays full-access only and
+    // Run now is not disabled for it. But approving persists local-checkout too, so the
+    // runtime worktree-creation fallback is covered once the user has approved.
     const gaps = automationApprovalGaps({
       ...base,
       runtimeMode: "full-access",
@@ -263,7 +264,7 @@ describe("automationApprovalGaps", () => {
       acknowledgedRisks: [],
     });
     expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
-    expect(gaps.acknowledgedRisks).toEqual(["full-access"]);
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
   });
 
   it("needs no approval for an approval-required auto automation", () => {
