@@ -908,6 +908,55 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("requires local-checkout acknowledgement for a local heartbeat", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("local-heartbeat-ack-thread");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      // A heartbeat reuses its target thread, but that thread can itself be on the local
+      // checkout, so `worktreeMode: "local"` must still require the acknowledgement.
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          acknowledgedRisks: [],
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /local checkout/);
+    }),
+  );
+
+  it.effect("blocks an unacknowledged fast interval run at dispatch", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-fast-interval-dispatch");
+      // Sub-minute schedule inserted directly, bypassing validateSchedulePolicy.
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          schedule: { type: "interval", everySeconds: 15 },
+          acknowledgedRisks: [],
+        },
+        now,
+      });
+
+      const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
+
+      assert.match(error.message, /fast interval/);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+    }),
+  );
+
   it.effect("runs due scheduled automations once and advances the next run", () =>
     Effect.gen(function* () {
       resetHarness();
