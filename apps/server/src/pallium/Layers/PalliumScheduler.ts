@@ -84,7 +84,7 @@ export const makePalliumSchedulerLive = (options?: PalliumSchedulerLiveOptions) 
           Effect.catchCause((cause) =>
             Effect.logWarning("pallium scheduler index refresh failed", {
               projectId,
-              cause: Cause.pretty(cause),
+              cause: redactedErrorMessage(Cause.squash(cause)),
             }),
           ),
         );
@@ -96,7 +96,7 @@ export const makePalliumSchedulerLive = (options?: PalliumSchedulerLiveOptions) 
         Effect.asVoid,
         Effect.catchCause((cause) =>
           Effect.logWarning("pallium scheduler session refresh failed", {
-            cause: Cause.pretty(cause),
+            cause: redactedErrorMessage(Cause.squash(cause)),
           }),
         ),
       );
@@ -115,7 +115,7 @@ export const makePalliumSchedulerLive = (options?: PalliumSchedulerLiveOptions) 
             Effect.logWarning("pallium scheduler project probe failed", {
               projectId: project.id,
               workspaceRoot: project.workspaceRoot,
-              cause: Cause.pretty(cause),
+              cause: redactedErrorMessage(Cause.squash(cause)),
             }),
           ),
         );
