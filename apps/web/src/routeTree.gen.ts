@@ -14,9 +14,11 @@ import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as ChatWorldcupRouteImport } from './routes/_chat.worldcup'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatPluginsRouteImport } from './routes/_chat.plugins'
+import { Route as ChatMemoryRouteImport } from './routes/_chat.memory'
 import { Route as ChatAutomationsRouteImport } from './routes/_chat.automations'
 import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
 import { Route as ChatWorkspaceIndexRouteImport } from './routes/_chat.workspace.index'
+import { Route as ChatMemoryIndexRouteImport } from './routes/_chat.memory.index'
 import { Route as ChatKanbanIndexRouteImport } from './routes/_chat.kanban.index'
 import { Route as ChatAutomationsIndexRouteImport } from './routes/_chat.automations.index'
 import { Route as ChatWorkspaceWorkspaceIdRouteImport } from './routes/_chat.workspace.$workspaceId'
@@ -47,6 +49,11 @@ const ChatPluginsRoute = ChatPluginsRouteImport.update({
   path: '/plugins',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatMemoryRoute = ChatMemoryRouteImport.update({
+  id: '/memory',
+  path: '/memory',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatAutomationsRoute = ChatAutomationsRouteImport.update({
   id: '/automations',
   path: '/automations',
@@ -61,6 +68,11 @@ const ChatWorkspaceIndexRoute = ChatWorkspaceIndexRouteImport.update({
   id: '/workspace/',
   path: '/workspace/',
   getParentRoute: () => ChatRoute,
+} as any)
+const ChatMemoryIndexRoute = ChatMemoryIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ChatMemoryRoute,
 } as any)
 const ChatKanbanIndexRoute = ChatKanbanIndexRouteImport.update({
   id: '/kanban/',
@@ -94,6 +106,7 @@ export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/$threadId': typeof ChatThreadIdRoute
   '/automations': typeof ChatAutomationsRouteWithChildren
+  '/memory': typeof ChatMemoryRouteWithChildren
   '/plugins': typeof ChatPluginsRoute
   '/settings': typeof ChatSettingsRoute
   '/worldcup': typeof ChatWorldcupRoute
@@ -102,6 +115,7 @@ export interface FileRoutesByFullPath {
   '/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
   '/automations/': typeof ChatAutomationsIndexRoute
   '/kanban/': typeof ChatKanbanIndexRoute
+  '/memory/': typeof ChatMemoryIndexRoute
   '/workspace/': typeof ChatWorkspaceIndexRoute
 }
 export interface FileRoutesByTo {
@@ -115,6 +129,7 @@ export interface FileRoutesByTo {
   '/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
   '/automations': typeof ChatAutomationsIndexRoute
   '/kanban': typeof ChatKanbanIndexRoute
+  '/memory': typeof ChatMemoryIndexRoute
   '/workspace': typeof ChatWorkspaceIndexRoute
 }
 export interface FileRoutesById {
@@ -122,6 +137,7 @@ export interface FileRoutesById {
   '/_chat': typeof ChatRouteWithChildren
   '/_chat/$threadId': typeof ChatThreadIdRoute
   '/_chat/automations': typeof ChatAutomationsRouteWithChildren
+  '/_chat/memory': typeof ChatMemoryRouteWithChildren
   '/_chat/plugins': typeof ChatPluginsRoute
   '/_chat/settings': typeof ChatSettingsRoute
   '/_chat/worldcup': typeof ChatWorldcupRoute
@@ -131,6 +147,7 @@ export interface FileRoutesById {
   '/_chat/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
   '/_chat/automations/': typeof ChatAutomationsIndexRoute
   '/_chat/kanban/': typeof ChatKanbanIndexRoute
+  '/_chat/memory/': typeof ChatMemoryIndexRoute
   '/_chat/workspace/': typeof ChatWorkspaceIndexRoute
 }
 export interface FileRouteTypes {
@@ -139,6 +156,7 @@ export interface FileRouteTypes {
     | '/'
     | '/$threadId'
     | '/automations'
+    | '/memory'
     | '/plugins'
     | '/settings'
     | '/worldcup'
@@ -147,6 +165,7 @@ export interface FileRouteTypes {
     | '/workspace/$workspaceId'
     | '/automations/'
     | '/kanban/'
+    | '/memory/'
     | '/workspace/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -160,12 +179,14 @@ export interface FileRouteTypes {
     | '/workspace/$workspaceId'
     | '/automations'
     | '/kanban'
+    | '/memory'
     | '/workspace'
   id:
     | '__root__'
     | '/_chat'
     | '/_chat/$threadId'
     | '/_chat/automations'
+    | '/_chat/memory'
     | '/_chat/plugins'
     | '/_chat/settings'
     | '/_chat/worldcup'
@@ -175,6 +196,7 @@ export interface FileRouteTypes {
     | '/_chat/workspace/$workspaceId'
     | '/_chat/automations/'
     | '/_chat/kanban/'
+    | '/_chat/memory/'
     | '/_chat/workspace/'
   fileRoutesById: FileRoutesById
 }
@@ -219,6 +241,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatPluginsRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/memory': {
+      id: '/_chat/memory'
+      path: '/memory'
+      fullPath: '/memory'
+      preLoaderRoute: typeof ChatMemoryRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/automations': {
       id: '/_chat/automations'
       path: '/automations'
@@ -239,6 +268,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/workspace/'
       preLoaderRoute: typeof ChatWorkspaceIndexRouteImport
       parentRoute: typeof ChatRoute
+    }
+    '/_chat/memory/': {
+      id: '/_chat/memory/'
+      path: '/'
+      fullPath: '/memory/'
+      preLoaderRoute: typeof ChatMemoryIndexRouteImport
+      parentRoute: typeof ChatMemoryRoute
     }
     '/_chat/kanban/': {
       id: '/_chat/kanban/'
@@ -292,9 +328,22 @@ const ChatAutomationsRouteWithChildren = ChatAutomationsRoute._addFileChildren(
   ChatAutomationsRouteChildren,
 )
 
+interface ChatMemoryRouteChildren {
+  ChatMemoryIndexRoute: typeof ChatMemoryIndexRoute
+}
+
+const ChatMemoryRouteChildren: ChatMemoryRouteChildren = {
+  ChatMemoryIndexRoute: ChatMemoryIndexRoute,
+}
+
+const ChatMemoryRouteWithChildren = ChatMemoryRoute._addFileChildren(
+  ChatMemoryRouteChildren,
+)
+
 interface ChatRouteChildren {
   ChatThreadIdRoute: typeof ChatThreadIdRoute
   ChatAutomationsRoute: typeof ChatAutomationsRouteWithChildren
+  ChatMemoryRoute: typeof ChatMemoryRouteWithChildren
   ChatPluginsRoute: typeof ChatPluginsRoute
   ChatSettingsRoute: typeof ChatSettingsRoute
   ChatWorldcupRoute: typeof ChatWorldcupRoute
@@ -308,6 +357,7 @@ interface ChatRouteChildren {
 const ChatRouteChildren: ChatRouteChildren = {
   ChatThreadIdRoute: ChatThreadIdRoute,
   ChatAutomationsRoute: ChatAutomationsRouteWithChildren,
+  ChatMemoryRoute: ChatMemoryRouteWithChildren,
   ChatPluginsRoute: ChatPluginsRoute,
   ChatSettingsRoute: ChatSettingsRoute,
   ChatWorldcupRoute: ChatWorldcupRoute,

@@ -4,6 +4,7 @@
 
 import {
   ArchiveIcon,
+  BrainIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
@@ -148,6 +149,7 @@ import {
   formatCadence,
   groupHeartbeatAutomationsByTargetThread,
 } from "../routes/-automations.shared";
+import { useMemoryStatus } from "../routes/-memory.shared";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { ProviderIcon } from "./ProviderIcon";
@@ -365,6 +367,7 @@ const DebugFeatureFlagsMenu = import.meta.env.DEV
 type ProjectContextMenuId =
   | "open-in-finder"
   | "open-in-kanban"
+  | "open-in-memory"
   | "copy-path"
   | "start-dev"
   | "stop-dev"
@@ -1269,6 +1272,10 @@ export default function Sidebar() {
   const isOnWorkspace = pathname.startsWith("/workspace");
   const isOnKanban = pathname.startsWith("/kanban");
   const isOnAutomations = pathname.startsWith("/automations");
+  const isOnMemory = pathname.startsWith("/memory");
+  // Gates the Memory nav row: when Pallium is absent the handshake reports unavailable and the
+  // row stays hidden, so Synara looks exactly as it does today.
+  const { available: isMemoryAvailable } = useMemoryStatus();
   // Lightweight read of automations to drive the sidebar attention badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
   const automationListQuery = useQuery({
@@ -3672,6 +3679,10 @@ export default function Sidebar() {
       }
       if (clicked === "open-in-kanban") {
         void navigate({ to: "/kanban/$projectId", params: { projectId } });
+        return;
+      }
+      if (clicked === "open-in-memory") {
+        void navigate({ to: "/memory", search: { projectId } });
         return;
       }
       if (clicked === "copy-path") {
@@ -6170,6 +6181,16 @@ export default function Sidebar() {
                         void navigate({ to: "/automations" });
                       }}
                     />
+                    {isMemoryAvailable ? (
+                      <SidebarPrimaryAction
+                        icon={BrainIcon}
+                        label="Memory"
+                        active={isOnMemory}
+                        onClick={() => {
+                          void navigate({ to: "/memory" });
+                        }}
+                      />
+                    ) : null}
                   </>
                 )}
               </SidebarMenu>
@@ -6685,6 +6706,20 @@ export default function Sidebar() {
                 <ProjectContextMenuIcon icon={KanbanIcon} />
                 <span>Open in Kanban</span>
               </MenuItem>
+              {isMemoryAvailable ? (
+                <MenuItem
+                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                  onClick={() =>
+                    void handleProjectContextMenuAction(
+                      projectContextMenuState.projectId,
+                      "open-in-memory",
+                    )
+                  }
+                >
+                  <ProjectContextMenuIcon icon={BrainIcon} />
+                  <span>Memory</span>
+                </MenuItem>
+              ) : null}
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
                 onClick={() =>
