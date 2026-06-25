@@ -82,6 +82,18 @@ const doctorFixture: PalliumDoctorResult = {
   openai_key_available: true,
 };
 
+// The doctor report AFTER a re-index: the epoch (last_indexed_commit) has advanced and the counts
+// moved, so a fresh overview must reflect these rather than the pre-index cached row.
+const doctorAfterIndexFixture: PalliumDoctorResult = {
+  ...doctorFixture,
+  last_indexed_commit: "def456",
+  indexed_at: "2026-06-24T08:00:00.000Z",
+  current_commit: "def456",
+  working_tree_dirty: false,
+  working_tree_file_count: 0,
+  session_stats: { ...doctorFixture.session_stats, sessions: 11 },
+};
+
 const changedNowFixture: PalliumChangedNowResult = {
   summary: "2 files changed",
   index_status: "indexed",
@@ -262,7 +274,9 @@ const makeFakePalliumLayer = (options: FakePalliumOptions) =>
 
 // An in-memory cache fake mirroring the real repository's epoch + TTL semantics. Keyed on
 // command+args+projectId+indexEpoch; a row only hits when it has not expired relative to `now`.
-const makeFakeCacheLayer = () =>
+const makeFakeCacheLayer = (options?: {
+  readonly invalidateStaleEpochsCallsRef?: Ref.Ref<number>;
+}) =>
   Effect.gen(function* () {
     const store = yield* Ref.make(new Map<string, PalliumCommandCacheEntry>());
     const keyOf = (input: {
@@ -290,8 +304,26 @@ const makeFakeCacheLayer = () =>
         return next;
       });
 
-    const invalidateStaleEpochs: PalliumCommandCacheRepositoryShape["invalidateStaleEpochs"] = () =>
-      Effect.void;
+    const invalidateStaleEpochs: PalliumCommandCacheRepositoryShape["invalidateStaleEpochs"] = (
+      input,
+    ) =>
+      tick(options?.invalidateStaleEpochsCallsRef).pipe(
+        Effect.flatMap(() =>
+          // Mirror the real repo: drop every cached row for this project whose epoch differs from
+          // the current one. The fake keeps full rows so the test can observe the post-index miss.
+          Ref.update(store, (map) => {
+            const next = new Map<string, PalliumCommandCacheEntry>();
+            for (const [key, entry] of map) {
+              const stale =
+                entry.projectId === input.projectId && entry.indexEpoch !== input.currentIndexEpoch;
+              if (!stale) {
+                next.set(key, entry);
+              }
+            }
+            return next;
+          }),
+        ),
+      );
     const sweepExpired: PalliumCommandCacheRepositoryShape["sweepExpired"] = () => Effect.void;
 
     return {
@@ -342,10 +374,20 @@ const makeMemoryLayer = (input: {
   readonly semanticCallsRef?: Ref.Ref<number>;
   readonly embed?: PalliumEmbedResult;
   readonly embedCallsRef?: Ref.Ref<number>;
+  readonly index?: PalliumIndexResult;
+  readonly indexCallsRef?: Ref.Ref<number>;
+  readonly doctorAfterIndex?: PalliumDoctorResult;
+  readonly invalidateStaleEpochsCallsRef?: Ref.Ref<number>;
 }) =>
   MemoryServiceLive.pipe(
     Layer.provide(makeFakePalliumLayer(input)),
-    Layer.provide(makeFakeCacheLayer()),
+    Layer.provide(
+      makeFakeCacheLayer(
+        input.invalidateStaleEpochsCallsRef !== undefined
+          ? { invalidateStaleEpochsCallsRef: input.invalidateStaleEpochsCallsRef }
+          : undefined,
+      ),
+    ),
     Layer.provide(makeFakeProjectionsLayer({ resolveRepo: input.resolveRepo ?? true })),
     Layer.provide(ServerSettingsService.layerTest()),
   );
@@ -815,4 +857,101 @@ it.effect("embedSessions maps the embed result when Pallium is available", () =>
     assert.strictEqual(result.embedded, 7);
     assert.strictEqual(result.model, "bge-m3");
   }),
+);
+
+it.effect("index fails fast with a typed error when Pallium is unavailable", () =>
+  Effect.gen(function* () {
+    const doctorCallsRef = yield* Ref.make(0);
+    const indexCallsRef = yield* Ref.make(0);
+    const exit = yield* Effect.exit(
+      Effect.provide(
+        Effect.gen(function* () {
+          const memory = yield* MemoryService;
+          return yield* memory.index({ projectId: PROJECT_ID });
+        }),
+        makeMemoryLayer({
+          status: unavailableStatus,
+          doctorCallsRef,
+          index: indexFixture,
+          indexCallsRef,
+        }),
+      ),
+    );
+    // MUTATING: unavailable must FAIL (not fold to an empty result), and never reach the runner.
+    assert.isTrue(Exit.isFailure(exit));
+    const error = Cause.squash((exit as Exit.Failure<unknown, unknown>).cause);
+    assert.instanceOf(error, MemoryServiceError);
+    assert.strictEqual(yield* Ref.get(indexCallsRef), 0);
+  }),
+);
+
+it.effect("index maps the index result when Pallium is available", () =>
+  Effect.gen(function* () {
+    const doctorCallsRef = yield* Ref.make(0);
+    const result = yield* Effect.provide(
+      Effect.gen(function* () {
+        const memory = yield* MemoryService;
+        return yield* memory.index({ projectId: PROJECT_ID });
+      }),
+      makeMemoryLayer({
+        status: availableStatus,
+        doctor: doctorFixture,
+        doctorCallsRef,
+        index: indexFixture,
+      }),
+    );
+    assert.strictEqual(result.repoRoot, REPO_PATH);
+    assert.strictEqual(result.branch, "main");
+    assert.strictEqual(result.commitCount, 120);
+    assert.strictEqual(result.fileCount, 340);
+    assert.strictEqual(result.cochangeEdgeCount, 56);
+  }),
+);
+
+it.effect(
+  "index invalidates the durable cache AND the in-process memo so the next overview is fresh",
+  () =>
+    Effect.gen(function* () {
+      const doctorCallsRef = yield* Ref.make(0);
+      const indexCallsRef = yield* Ref.make(0);
+      const invalidateStaleEpochsCallsRef = yield* Ref.make(0);
+      const layer = makeMemoryLayer({
+        status: availableStatus,
+        // doctor returns the pre-index fixture first, then the post-index fixture on every later
+        // call (simulating the epoch + counts advancing after the re-index).
+        doctor: doctorFixture,
+        doctorAfterIndex: doctorAfterIndexFixture,
+        doctorCallsRef,
+        index: indexFixture,
+        indexCallsRef,
+        invalidateStaleEpochsCallsRef,
+      });
+
+      yield* Effect.provide(
+        Effect.gen(function* () {
+          const memory = yield* MemoryService;
+
+          // 1) Prime: first overview spawns doctor once (epoch "abc123") and caches that row.
+          const first = yield* memory.overview({ projectId: PROJECT_ID });
+          assert.strictEqual(first.counts.sessions, 10);
+          assert.strictEqual(yield* Ref.get(doctorCallsRef), 1);
+
+          // 2) Re-index: spawns index, then probes doctor again to learn the new epoch (call 2),
+          //    invalidates the durable cache, and clears the in-process epoch memo.
+          yield* memory.index({ projectId: PROJECT_ID });
+          assert.strictEqual(yield* Ref.get(indexCallsRef), 1);
+          assert.strictEqual(yield* Ref.get(invalidateStaleEpochsCallsRef), 1);
+
+          // 3) Next overview must NOT short-circuit on the stale memo: with the memo cleared and the
+          //    old epoch row invalidated, it re-probes doctor (call 4) and reflects the fresh counts
+          //    immediately — no TTL wait.
+          const after = yield* memory.overview({ projectId: PROJECT_ID });
+          assert.strictEqual(after.counts.sessions, 11);
+          assert.isFalse(after.workingTreeDirty);
+          assert.strictEqual(after.lastIndexedCommit, "def456");
+          assert.isTrue((yield* Ref.get(doctorCallsRef)) >= 3);
+        }),
+        layer,
+      );
+    }),
 );
