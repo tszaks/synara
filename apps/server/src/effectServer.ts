@@ -21,6 +21,7 @@ import { Keybindings } from "./keybindings";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { PalliumScheduler } from "./pallium/Services/PalliumScheduler";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
 import { reconcileRestartStuckTurns } from "./orchestration/startupTurnReconciliation";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper";
@@ -45,6 +46,7 @@ export interface ServerShape {
     | ServerLifecycleEvents
     | OrchestrationEngineService
     | OrchestrationReactor
+    | PalliumScheduler
     | ProjectionSnapshotQuery
     | ProviderSessionReaper
     | ServerRuntimeStartup
@@ -71,6 +73,7 @@ export const createEffectServer = Effect.fn(function* () {
   const keybindings = yield* Keybindings;
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const orchestrationReactor = yield* OrchestrationReactor;
+  const palliumScheduler = yield* PalliumScheduler;
   const providerSessionReaper = yield* ProviderSessionReaper;
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
@@ -132,6 +135,7 @@ export const createEffectServer = Effect.fn(function* () {
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
   yield* Scope.provide(automationScheduler.start(), subscriptionsScope);
   yield* Scope.provide(automationRunReactor.start(), subscriptionsScope);
+  yield* Scope.provide(palliumScheduler.start(), subscriptionsScope);
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
   yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
