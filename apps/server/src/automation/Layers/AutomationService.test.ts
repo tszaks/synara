@@ -11,6 +11,7 @@ import {
   TurnId,
   type AutomationCreateInput,
   type AutomationRun,
+  type MemoryFile,
   type GitCreateWorktreeInput,
   type GitRemoveWorktreeInput,
   type OrchestrationCommand,
@@ -26,6 +27,8 @@ import {
   type GitDeleteBranchInput,
 } from "../../git/Services/GitCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
+import { MemoryServiceError } from "../../memory/Errors.ts";
+import { MemoryService, type MemoryServiceShape } from "../../memory/Services/MemoryService.ts";
 import { OrchestrationCommandInternalError } from "../../orchestration/Errors.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import type { OrchestrationEngineShape } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -92,6 +95,11 @@ let failDispatchType: OrchestrationCommand["type"] | null = null;
 let dispatchHook:
   | ((command: OrchestrationCommand) => Effect.Effect<void, OrchestrationCommandInternalError>)
   | null = null;
+// Controls the fake MemoryService used to exercise the opt-in preflight context bridge.
+let memoryAvailable = false;
+let memoryFiles: MemoryFile[] = [];
+// When set, the memory listFiles call fails so we can exercise the degrade-to-no-injection path.
+let memoryListFilesFailure: Error | null = null;
 
 function resetHarness() {
   dispatchedCommands.length = 0;
@@ -113,6 +121,9 @@ function resetHarness() {
   completionEvaluationGate = null;
   failDispatchType = null;
   dispatchHook = null;
+  memoryAvailable = false;
+  memoryFiles = [];
+  memoryListFilesFailure = null;
 }
 
 // Build a partial thread shell; only the fields reconcileThread reads are populated.
@@ -479,6 +490,31 @@ const gitCore = {
     }),
 } as unknown as GitCoreShape;
 
+// Fake MemoryService driving the opt-in preflight context bridge. Defaults to unavailable so the
+// existing suite behaves exactly as before; tests opt in by flipping memoryAvailable + memoryFiles.
+const memoryService = {
+  status: Effect.sync(() => ({
+    available: memoryAvailable,
+    capabilities: {
+      sessions: memoryAvailable,
+      decisions: memoryAvailable,
+      changedNow: memoryAvailable,
+      embeddings: false,
+    },
+  })),
+  overview: () => Effect.die("unused"),
+  listFiles: () =>
+    memoryListFilesFailure
+      ? Effect.fail(new MemoryServiceError({ message: memoryListFilesFailure.message }))
+      : Effect.succeed({ available: memoryAvailable, files: memoryFiles }),
+  listSessions: () => Effect.succeed({ available: memoryAvailable, sessions: [] }),
+  listDecisions: () => Effect.succeed({ available: memoryAvailable, decisions: [] }),
+  search: () => Effect.die("unused"),
+  searchSemantic: () => Effect.die("unused"),
+  embedSessions: () => Effect.die("unused"),
+  index: () => Effect.die("unused"),
+} as unknown as MemoryServiceShape;
+
 const layer = it.layer(
   AutomationServiceLive.pipe(
     Layer.provideMerge(AutomationRepositoryLive),
@@ -489,6 +525,7 @@ const layer = it.layer(
     Layer.provideMerge(Layer.succeed(TextGeneration, textGeneration)),
     Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(Layer.succeed(GitCore, gitCore)),
+    Layer.provideMerge(Layer.succeed(MemoryService, memoryService)),
   ),
 );
 
@@ -554,6 +591,111 @@ layer("AutomationService", (it) => {
       assert.strictEqual(result.run.messageId, turnStart.message.messageId);
       assert.strictEqual(result.run.threadCreateCommandId, threadCreate.commandId);
       assert.strictEqual(result.run.turnStartCommandId, turnStart.commandId);
+    }),
+  );
+
+  it.effect(
+    "memory bridge default off dispatches the exact prompt even when Memory is available",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        // Memory IS available with rich context, but the definition opts out (default "off"),
+        // so the dispatched message must be byte-identical to today (no injection).
+        memoryAvailable = true;
+        memoryFiles = [
+          {
+            path: "src/danger.ts",
+            workingTreeStatus: "modified",
+            riskLevel: "high",
+            suggestedTests: ["src/danger.test.ts"],
+            blastRadius: [],
+          },
+        ];
+        const service = yield* AutomationService;
+        const created = yield* service.create(createInput("local"));
+
+        yield* service.runNow({ automationId: created.id });
+        const turnStart = dispatchedCommands.find(
+          (command) => command.type === "thread.turn.start",
+        );
+        assert.ok(turnStart && turnStart.type === "thread.turn.start");
+        assert.strictEqual(turnStart.message.text, "Check stale dependencies.");
+      }),
+  );
+
+  it.effect("memory preflight with Pallium unavailable dispatches the exact prompt", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      memoryAvailable = false;
+      memoryFiles = [
+        {
+          path: "src/danger.ts",
+          workingTreeStatus: "modified",
+          riskLevel: "high",
+          suggestedTests: ["src/danger.test.ts"],
+          blastRadius: [],
+        },
+      ];
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        memoryContextMode: "preflight",
+      });
+
+      yield* service.runNow({ automationId: created.id });
+      const turnStart = dispatchedCommands.find((command) => command.type === "thread.turn.start");
+      assert.ok(turnStart && turnStart.type === "thread.turn.start");
+      assert.strictEqual(turnStart.message.text, "Check stale dependencies.");
+    }),
+  );
+
+  it.effect("memory preflight with Pallium available prepends the context block", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      memoryAvailable = true;
+      memoryFiles = [
+        {
+          path: "src/danger.ts",
+          workingTreeStatus: "modified",
+          riskLevel: "high",
+          suggestedTests: ["src/danger.test.ts"],
+          blastRadius: [],
+        },
+      ];
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        memoryContextMode: "preflight",
+      });
+
+      yield* service.runNow({ automationId: created.id });
+      const turnStart = dispatchedCommands.find((command) => command.type === "thread.turn.start");
+      assert.ok(turnStart && turnStart.type === "thread.turn.start");
+      // The message must START with the Memory context block, then the original prompt.
+      assert.isTrue(turnStart.message.text.startsWith("=== Memory context (Pallium) ==="));
+      assert.isTrue(turnStart.message.text.includes("src/danger.ts"));
+      assert.isTrue(turnStart.message.text.includes("src/danger.test.ts"));
+      assert.isTrue(turnStart.message.text.endsWith("Check stale dependencies."));
+    }),
+  );
+
+  it.effect("memory preflight context-fetch error degrades to no injection", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      memoryAvailable = true;
+      memoryListFilesFailure = new Error("pallium changed-now exploded");
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        memoryContextMode: "preflight",
+      });
+
+      // The run still dispatches normally with the exact prompt.
+      const result = yield* service.runNow({ automationId: created.id });
+      const turnStart = dispatchedCommands.find((command) => command.type === "thread.turn.start");
+      assert.ok(turnStart && turnStart.type === "thread.turn.start");
+      assert.strictEqual(result.run.status, "running");
+      assert.strictEqual(turnStart.message.text, "Check stale dependencies.");
     }),
   );
 

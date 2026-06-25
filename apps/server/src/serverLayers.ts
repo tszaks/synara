@@ -99,21 +99,6 @@ export function makeServerRuntimeServicesLayer() {
     authControlPlaneLayer,
     serverAuthLayer,
   );
-  const automationServiceLayer = AutomationServiceLive.pipe(
-    Layer.provideMerge(AutomationRepositoryLive),
-    Layer.provideMerge(ProjectionTurnRepositoryLive),
-    Layer.provideMerge(GitCoreLive),
-    Layer.provideMerge(TextGenerationLayerLive),
-    Layer.provideMerge(ServerSettingsLive),
-    Layer.provideMerge(runtimeServicesLayer),
-  );
-  const automationSchedulerLayer = AutomationSchedulerLive.pipe(
-    Layer.provideMerge(automationServiceLayer),
-    Layer.provideMerge(AutomationRepositoryLive),
-  );
-  const automationRunReactorLayer = AutomationRunReactorLive.pipe(
-    Layer.provideMerge(automationServiceLayer),
-  );
   const palliumServiceLayer = PalliumServiceLive.pipe(
     Layer.provideMerge(ServerSettingsLive),
     // The semantic-search / embed runners read the embedding api key from the secret store to pass
@@ -126,6 +111,24 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(PalliumCommandCacheRepositoryLive),
     Layer.provideMerge(OrchestrationLayerLive),
     Layer.provideMerge(ServerSettingsLive),
+  );
+  // MemoryService is injected for the opt-in proactive context bridge. It does not depend on
+  // AutomationService, so there is no layer cycle; the bridge is default-off and fully guarded.
+  const automationServiceLayer = AutomationServiceLive.pipe(
+    Layer.provideMerge(AutomationRepositoryLive),
+    Layer.provideMerge(ProjectionTurnRepositoryLive),
+    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(TextGenerationLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(memoryServiceLayer),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const automationSchedulerLayer = AutomationSchedulerLive.pipe(
+    Layer.provideMerge(automationServiceLayer),
+    Layer.provideMerge(AutomationRepositoryLive),
+  );
+  const automationRunReactorLayer = AutomationRunReactorLive.pipe(
+    Layer.provideMerge(automationServiceLayer),
   );
   const palliumSchedulerLayer = PalliumSchedulerLive.pipe(
     Layer.provideMerge(memoryServiceLayer),
