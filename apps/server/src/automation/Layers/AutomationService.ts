@@ -26,6 +26,7 @@ import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
+import { MemoryService } from "../../memory/Services/MemoryService.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
@@ -41,6 +42,11 @@ import {
   failedAutomationCompletionEvaluation,
   normalizeAutomationCompletionReason,
 } from "../runResult.ts";
+import {
+  applyMemoryContext,
+  formatMemoryContextBlock,
+  memoryContextModeWantsPreflight,
+} from "../memoryContext.ts";
 import {
   computeAutomationScheduleSpacingSeconds,
   computeNextAutomationRunAt,
@@ -433,6 +439,7 @@ function mergeDefinitionUpdate(
     interactionMode: input.interactionMode ?? current.interactionMode,
     worktreeMode: input.worktreeMode ?? current.worktreeMode,
     mode,
+    memoryContextMode: input.memoryContextMode ?? current.memoryContextMode ?? "off",
     targetThreadId: hasOwn(input, "targetThreadId")
       ? ((input.targetThreadId as AutomationDefinition["targetThreadId"] | undefined) ?? null)
       : current.targetThreadId,
@@ -502,6 +509,11 @@ export const AutomationServiceLive = Layer.effect(
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
+    // Opt-in proactive Memory context bridge. MemoryService does not depend on AutomationService,
+    // so injecting it here introduces no layer cycle. Every use is guarded by the definition's
+    // memoryContextMode AND Pallium availability, and degrades to no injection on any failure, so
+    // automations behave exactly as before when the bridge is off or Memory is unavailable.
+    const memoryService = yield* MemoryService;
     // Unbounded so we never silently drop run/definition updates under a burst, matching
     // the rest of the server's PubSub usage.
     const events = yield* PubSub.unbounded<AutomationStreamEvent>();
@@ -842,6 +854,45 @@ export const AutomationServiceLive = Layer.effect(
         turn?.turnId !== undefined &&
         shell.latestTurn?.turnId === turn.turnId);
 
+    // Opt-in proactive Memory context bridge. Returns the run prompt with a compact, clearly
+    // delimited Memory context block prepended when the definition opts in AND Pallium is
+    // available AND there is context worth injecting. In every other case (mode off, Pallium
+    // unavailable, fetch/format failure, or empty context) it returns the prompt UNCHANGED so the
+    // dispatched message stays byte-identical to today. The whole fetch is wrapped so any error
+    // degrades to no injection rather than failing the run.
+    const resolveRunPrompt = (definition: AutomationDefinition): Effect.Effect<string, never> => {
+      const mode = definition.memoryContextMode ?? "off";
+      if (!memoryContextModeWantsPreflight(mode)) {
+        return Effect.succeed(definition.prompt);
+      }
+      return memoryService.status.pipe(
+        Effect.flatMap((status) => {
+          if (!status.available) {
+            return Effect.succeed(definition.prompt);
+          }
+          return Effect.all({
+            files: memoryService.listFiles({ projectId: definition.projectId }),
+            sessions: memoryService.listSessions({ projectId: definition.projectId }),
+            decisions: memoryService.listDecisions({
+              query: definition.prompt,
+              projectId: definition.projectId,
+            }),
+          }).pipe(
+            Effect.map((snapshots) =>
+              applyMemoryContext(definition.prompt, formatMemoryContextBlock(snapshots)),
+            ),
+          );
+        }),
+        // Any failure (Pallium error, decode, etc.) must not break the run: dispatch as today.
+        Effect.catchCause((cause) =>
+          Effect.logWarning("automation memory context bridge degraded to no injection", {
+            automationId: definition.id,
+            error: Cause.pretty(cause),
+          }).pipe(Effect.as(definition.prompt)),
+        ),
+      );
+    };
+
     // Dispatch a run: standalone creates a fresh thread + turn; heartbeat continues the
     // configured target thread with a new turn. A failure marks the run failed before
     // re-raising so the scheduler/caller still observes the error.
@@ -951,6 +1002,7 @@ export const AutomationServiceLive = Layer.effect(
             "Automation run was cancelled before continuing the thread.",
           );
 
+          const heartbeatPrompt = yield* resolveRunPrompt(definition);
           yield* orchestrationEngine
             .dispatch({
               type: "thread.turn.start",
@@ -959,7 +1011,7 @@ export const AutomationServiceLive = Layer.effect(
               message: {
                 messageId,
                 role: "user",
-                text: definition.prompt,
+                text: heartbeatPrompt,
                 attachments: [],
               },
               modelSelection: definition.modelSelection,
@@ -1039,6 +1091,7 @@ export const AutomationServiceLive = Layer.effect(
         yield* requireRunStillDispatching(
           "Automation run was cancelled before starting the automation turn.",
         );
+        const standalonePrompt = yield* resolveRunPrompt(definition);
         yield* orchestrationEngine
           .dispatch({
             type: "thread.turn.start",
@@ -1047,7 +1100,7 @@ export const AutomationServiceLive = Layer.effect(
             message: {
               messageId,
               role: "user",
-              text: definition.prompt,
+              text: standalonePrompt,
               attachments: [],
             },
             modelSelection: definition.modelSelection,

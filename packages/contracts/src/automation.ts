@@ -84,6 +84,23 @@ export type AutomationWorktreeMode = typeof AutomationWorktreeMode.Type;
 export const AutomationMode = Schema.Literals(["standalone", "heartbeat"]);
 export type AutomationMode = typeof AutomationMode.Type;
 
+/**
+ * Opt-in Memory (Pallium) context bridge for an automation run.
+ * - `off` (default): runs behave exactly as before; no Memory context is ever injected.
+ * - `preflight`: prepend a compact Memory context block to the dispatched run message.
+ * - `preflight-and-postflight`: preflight injection now; postflight Triage enrichment is a
+ *   deliberate follow-up (treated as preflight today).
+ * The bridge is always additionally guarded at runtime by Pallium availability.
+ */
+export const AutomationMemoryContextMode = Schema.Literals([
+  "off",
+  "preflight",
+  "preflight-and-postflight",
+]);
+export type AutomationMemoryContextMode = typeof AutomationMemoryContextMode.Type;
+
+export const DEFAULT_AUTOMATION_MEMORY_CONTEXT_MODE: AutomationMemoryContextMode = "off";
+
 export const AutomationTrigger = Schema.Union([
   Schema.Struct({ type: Schema.Literal("manual") }),
   Schema.Struct({ type: Schema.Literal("scheduled") }),
@@ -201,6 +218,13 @@ export const AutomationDefinition = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   worktreeMode: AutomationWorktreeMode,
   mode: AutomationMode,
+  /**
+   * Opt-in Memory context bridge. Defaults to "off" so every existing/old row decodes unchanged
+   * and runs with no injected context.
+   */
+  memoryContextMode: Schema.optional(AutomationMemoryContextMode).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_MEMORY_CONTEXT_MODE),
+  ),
   /** Heartbeat target thread continued on each wake. Null for standalone automations. */
   targetThreadId: Schema.NullOr(ThreadId),
   /** Hard cap on total runs before the automation auto-disables. Null = unbounded. */
@@ -257,6 +281,9 @@ const AutomationDefinitionConfig = Schema.Struct({
   mode: Schema.optional(AutomationMode).pipe(
     Schema.withDecodingDefault(() => "standalone" as const),
   ),
+  memoryContextMode: Schema.optional(AutomationMemoryContextMode).pipe(
+    Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_MEMORY_CONTEXT_MODE),
+  ),
   targetThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -301,6 +328,7 @@ export const AutomationUpdateInput = Schema.Struct({
   interactionMode: Schema.optional(ProviderInteractionMode),
   worktreeMode: Schema.optional(AutomationWorktreeMode),
   mode: Schema.optional(AutomationMode),
+  memoryContextMode: Schema.optional(AutomationMemoryContextMode),
   targetThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   maxIterations: Schema.optional(Schema.NullOr(PositiveInt)),
   stopOnError: Schema.optional(Schema.Boolean),
